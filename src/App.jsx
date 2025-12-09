@@ -28,21 +28,29 @@ function ProgressBar({ progress, label, fileName }) {
 }
 
 // ----------------------
-// CAMERA QR SCANNER
+// CAMERA QR SCANNER - Fixed scanner with proper video loading and debugging
 // ----------------------
 function CameraScanner({ onScan, onClose }) {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
   const animationRef = useRef(null)
+  const [scanStatus, setScanStatus] = useState("Initializing camera...")
+  const [hasCamera, setHasCamera] = useState(true)
 
   useEffect(() => {
     let mounted = true
+    let scanning = false
 
     const startCamera = async () => {
       try {
+        // Request camera permission
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
+          video: {
+            facingMode: "environment",
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          },
         })
 
         if (!mounted) {
@@ -51,47 +59,76 @@ function CameraScanner({ onScan, onClose }) {
         }
 
         streamRef.current = stream
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream
-          videoRef.current.play()
-        }
 
-        const scanQR = () => {
-          if (!mounted || !videoRef.current || !canvasRef.current) return
-
-          const video = videoRef.current
-          const canvas = canvasRef.current
-          const ctx = canvas.getContext("2d")
-
-          if (video.readyState === video.HAVE_ENOUGH_DATA) {
-            canvas.width = video.videoWidth
-            canvas.height = video.videoHeight
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-            const code = jsQR(imageData.data, canvas.width, canvas.height)
-
-            if (code) {
-              onScan(code.data)
-              return
-            }
+          // Wait for video to be ready
+          videoRef.current.onloadedmetadata = () => {
+            if (!mounted) return
+            videoRef.current
+              .play()
+              .then(() => {
+                setScanStatus("Scanning for QR code...")
+                scanning = true
+                scanQR()
+              })
+              .catch((err) => {
+                console.error("Video play error:", err)
+                setScanStatus("Error playing video")
+              })
           }
-
-          animationRef.current = requestAnimationFrame(scanQR)
         }
-
-        scanQR()
       } catch (err) {
         console.error("Camera error:", err)
-        alert("Could not access camera. Please check permissions.")
-        onClose()
+        setHasCamera(false)
+        setScanStatus("Camera access denied or unavailable")
       }
+    }
+
+    const scanQR = () => {
+      if (!mounted || !scanning) return
+
+      const video = videoRef.current
+      const canvas = canvasRef.current
+
+      if (!video || !canvas) {
+        animationRef.current = requestAnimationFrame(scanQR)
+        return
+      }
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })
+
+      if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+        try {
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "dontInvert",
+          })
+
+          if (code && code.data) {
+            setScanStatus("QR Code found!")
+            scanning = false
+            onScan(code.data)
+            return
+          }
+        } catch (e) {
+          console.error("Scan error:", e)
+        }
+      }
+
+      animationRef.current = requestAnimationFrame(scanQR)
     }
 
     startCamera()
 
     return () => {
       mounted = false
+      scanning = false
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current)
       }
@@ -99,18 +136,37 @@ function CameraScanner({ onScan, onClose }) {
         streamRef.current.getTracks().forEach((t) => t.stop())
       }
     }
-  }, [onScan, onClose])
+  }, [onScan])
 
   return (
-    <div className="relative mt-6">
-      <video ref={videoRef} className="w-80 h-80 bg-black rounded-xl object-cover" playsInline muted />
-      <canvas ref={canvasRef} className="hidden" />
-      <button onClick={onClose} className="absolute top-2 right-2 bg-red-500 text-white px-3 py-1 rounded-lg text-sm">
-        Close
+    <div className="relative mt-6 flex flex-col items-center">
+      {hasCamera ? (
+        <>
+          <video ref={videoRef} className="w-80 h-80 bg-black rounded-xl object-cover" playsInline muted autoPlay />
+          <canvas ref={canvasRef} className="hidden" />
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="w-48 h-48 border-2 border-white/50 rounded-lg">
+              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-green-400 rounded-tl-lg" />
+              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-green-400 rounded-tr-lg" />
+              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-green-400 rounded-bl-lg" />
+              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-green-400 rounded-br-lg" />
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="w-80 h-80 bg-muted rounded-xl flex items-center justify-center">
+          <p className="text-foreground/60 text-center px-4">Camera not available. Please check permissions.</p>
+        </div>
+      )}
+
+      <p className="text-foreground/80 text-sm mt-3">{scanStatus}</p>
+
+      <button
+        onClick={onClose}
+        className="mt-3 bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+      >
+        Close Scanner
       </button>
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="w-48 h-48 border-2 border-white/50 rounded-lg" />
-      </div>
     </div>
   )
 }
