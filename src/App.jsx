@@ -3,29 +3,37 @@ import QRCode from "qrcode";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import "./App.css";
 
+import { Html5Qrcode } from "html5-qrcode";
+
 function CameraScanner({ onScan }) {
   useEffect(() => {
-    const scanner = new Html5QrcodeScanner(
-      "qr-reader",
-      { fps: 10, qrbox: 250 },
-      false
-    );
+    const qr = new Html5Qrcode("qr-reader");
 
-    scanner.render(
+    qr.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: 250,
+      },
       (decodedText) => {
         onScan(decodedText);
-        scanner.clear();
+        qr.stop();
       },
-      (error) => {}
+      (err) => {
+        // ignore "no code found" errors
+      }
     );
 
     return () => {
-      scanner.clear();
+      try {
+        qr.stop();
+      } catch {}
     };
-  }, [onScan]);
+  }, []);
 
   return <div id="qr-reader" className="w-80 h-80 bg-black rounded-xl"></div>;
 }
+
 
 function App() {
   const [qrImage, setQrImage] = useState("");
