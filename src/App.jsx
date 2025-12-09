@@ -1,0 +1,245 @@
+import { useState, useRef, useEffect } from "react";
+import QRCode from "qrcode";
+import { Html5QrcodeScanner } from "html5-qrcode";
+import "./App.css";
+
+function CameraScanner({ onScan }) {
+  useEffect(() => {
+    const scanner = new Html5QrcodeScanner(
+      "qr-reader",
+      { fps: 10, qrbox: 250 },
+      false
+    );
+
+    scanner.render(
+      (decodedText) => {
+        onScan(decodedText);
+        scanner.clear();
+      },
+      (error) => {}
+    );
+
+    return () => {
+      scanner.clear();
+    };
+  }, [onScan]);
+
+  return <div id="qr-reader" className="w-80 h-80 bg-black rounded-xl"></div>;
+}
+
+function App() {
+  const [qrImage, setQrImage] = useState("");
+  const [cameraMode, setCameraMode] = useState(false);
+
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [progress, setProgress] = useState(0);
+
+  const pcRef = useRef(null);
+  const channelRef = useRef(null);
+
+  let receivedChunks = useRef([]);
+
+  // -------------------------------------------------------
+  // CREATE OFFER QR
+  // -------------------------------------------------------
+  const createOfferQR = async () => {
+    const pc = new RTCPeerConnection();
+    pcRef.current = pc;
+
+    const channel = pc.createDataChannel("fileShare");
+    channelRef.current = channel;
+
+    channel.onopen = () => alert("Connected! DataChannel Ready.");
+
+    channel.onmessage = (e) => receiveChunk(e.data);
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    const text = JSON.stringify(offer);
+    const qr = await QRCode.toDataURL(text, { width: 500 });
+    setQrImage(qr);
+  };
+
+  // -------------------------------------------------------
+  // HANDLE SCANNED OFFER → GENERATE ANSWER
+  // -------------------------------------------------------
+  const handleOfferFromQr = async (data) => {
+    try {
+      const offer = JSON.parse(data);
+
+      const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+
+      pc.ondatachannel = (event) => {
+        const channel = event.channel;
+        channelRef.current = channel;
+        channel.onmessage = (e) => receiveChunk(e.data);
+      };
+
+      await pc.setRemoteDescription(offer);
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      const ansText = JSON.stringify(answer);
+      const qr = await QRCode.toDataURL(ansText);
+
+      setQrImage(qr);
+      setCameraMode(false);
+    } catch {
+      alert("Invalid Offer QR");
+    }
+  };
+
+  // -------------------------------------------------------
+  // HANDLE ANSWER → CONNECT
+  // -------------------------------------------------------
+  const handleAnswerFromQr = async (data) => {
+    try {
+      const answer = JSON.parse(data);
+      await pcRef.current.setRemoteDescription(answer);
+
+      alert("P2P Connected Successfully!");
+      setCameraMode(false);
+    } catch {
+      alert("Invalid Answer QR");
+    }
+  };
+
+  // -------------------------------------------------------
+  // SCAN RESULT DECODER
+  // -------------------------------------------------------
+  const handleScan = (text) => {
+    if (text.includes(`"type":"offer"`)) {
+      handleOfferFromQr(text);
+    } else if (text.includes(`"type":"answer"`)) {
+      handleAnswerFromQr(text);
+    }
+  };
+
+  // -------------------------------------------------------
+  // LARGE FILE SENDING (CHUNKS)
+  // -------------------------------------------------------
+  const sendLargeFile = async (file) => {
+    const channel = channelRef.current;
+    if (!channel || channel.readyState !== "open") {
+      alert("Connection not ready!");
+      return;
+    }
+
+    const chunkSize = 64 * 1024; // 64KB
+    const buffer = await file.arrayBuffer();
+    const totalSize = buffer.byteLength;
+    let offset = 0;
+
+    while (offset < totalSize) {
+      const chunk = buffer.slice(offset, offset + chunkSize);
+
+      channel.send(chunk);
+      offset += chunkSize;
+
+      setProgress(Math.floor((offset / totalSize) * 100));
+      await new Promise((res) => setTimeout(res, 2));
+    }
+
+    channel.send("EOF");
+    alert("File Sent Successfully!");
+  };
+
+  // -------------------------------------------------------
+  // RECEIVE CHUNKS
+  // -------------------------------------------------------
+  const receiveChunk = (data) => {
+    if (data === "EOF") {
+      const blob = new Blob(receivedChunks.current);
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "received_file.bin";
+      a.click();
+
+      URL.revokeObjectURL(url);
+      receivedChunks.current = [];
+      return;
+    }
+
+    receivedChunks.current.push(data);
+  };
+
+  return (
+    <div className="w-full min-h-screen bg-blue-900/50 flex flex-col items-center">
+
+      <h1 className="text-white text-3xl mt-8">QR ➜ WebRTC File Sharing</h1>
+
+      {/* OFFER BUTTON */}
+      <button
+        onClick={createOfferQR}
+        className="mt-6 bg-green-500 px-6 py-3 rounded-xl text-white"
+      >
+        Create Offer QR
+      </button>
+
+      {/* ENABLE CAMERA */}
+      <button
+        onClick={() => setCameraMode(true)}
+        className="mt-4 bg-purple-600 px-6 py-3 rounded-xl text-white"
+      >
+        Scan QR With Camera
+      </button>
+
+      {/* CAMERA SCANNER */}
+      {cameraMode && (
+        <CameraScanner
+          onScan={(txt) => {
+            handleScan(txt);
+            setCameraMode(false);
+          }}
+        />
+      )}
+
+      {/* QR DISPLAY */}
+      {qrImage && (
+        <img src={qrImage} className="w-72 bg-white p-4 rounded-xl mt-6" />
+      )}
+
+      {/* FILE PICKER */}
+      <input
+        type="file"
+        onChange={(e) => setSelectedFile(e.target.files[0])}
+        className="mt-10 text-white"
+      />
+
+      {/* FILE PREVIEW */}
+      {selectedFile && (
+        <div className="text-white mt-3">
+          <p>📄 {selectedFile.name}</p>
+          <p>{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+        </div>
+      )}
+
+      {/* SEND BUTTON */}
+      {selectedFile && (
+        <button
+          onClick={() => sendLargeFile(selectedFile)}
+          className="mt-4 bg-blue-600 px-6 py-3 rounded-xl text-white"
+        >
+          Send File
+        </button>
+      )}
+
+      {/* PROGRESS BAR */}
+      {progress > 0 && (
+        <div className="w-80 bg-gray-300 rounded-full mt-4">
+          <div
+            className="bg-green-500 h-4 rounded-full"
+            style={{ width: `${progress}%` }}
+          ></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default App;
