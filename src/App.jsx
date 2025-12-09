@@ -1,32 +1,29 @@
 import { useState, useRef, useEffect } from "react";
 import QRCode from "qrcode";
-import { Html5QrcodeScanner } from "html5-qrcode";
+import { Html5Qrcode } from "html5-qrcode";
 import "./App.css";
 
-import { Html5Qrcode } from "html5-qrcode";
 
+// ----------------------
+// CAMERA QR SCANNER
+// ----------------------
 function CameraScanner({ onScan }) {
   useEffect(() => {
     const qr = new Html5Qrcode("qr-reader");
 
     qr.start(
       { facingMode: "environment" },
-      {
-        fps: 10,
-        qrbox: 250,
-      },
+      { fps: 10, qrbox: 250 },
       (decodedText) => {
         onScan(decodedText);
-        qr.stop();
+        qr.stop().catch(() => {});
       },
-      (err) => {
-        // ignore "no code found" errors
-      }
+      () => {}
     );
 
     return () => {
       try {
-        qr.stop();
+        qr.stop().catch(() => {});
       } catch {}
     };
   }, []);
@@ -35,20 +32,36 @@ function CameraScanner({ onScan }) {
 }
 
 
+
+// ===================================================
+// MAIN APP
+// ===================================================
 function App() {
   const [qrImage, setQrImage] = useState("");
   const [cameraMode, setCameraMode] = useState(false);
-
   const [selectedFile, setSelectedFile] = useState(null);
   const [progress, setProgress] = useState(0);
 
   const pcRef = useRef(null);
   const channelRef = useRef(null);
 
-  let receivedChunks = useRef([]);
+  const receivedChunks = useRef([]);
+
+  // ICE COMPLETE PROMISE (VERY IMPORTANT)
+  function waitForICE(pc) {
+    return new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") return resolve();
+
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === "complete") resolve();
+      };
+    });
+  }
+
+
 
   // -------------------------------------------------------
-  // CREATE OFFER QR
+  // CREATE OFFER → QR
   // -------------------------------------------------------
   const createOfferQR = async () => {
     const pc = new RTCPeerConnection();
@@ -57,20 +70,27 @@ function App() {
     const channel = pc.createDataChannel("fileShare");
     channelRef.current = channel;
 
-    channel.onopen = () => alert("Connected! DataChannel Ready.");
+    channel.onopen = () => console.log("DataChannel ready ✔");
+    channel.onerror = (e) => console.log("Channel error:", e);
 
     channel.onmessage = (e) => receiveChunk(e.data);
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    const text = JSON.stringify(offer);
-    const qr = await QRCode.toDataURL(text, { width: 500 });
+    // wait for ICE fully gathered
+    await waitForICE(pc);
+
+    const fullOffer = JSON.stringify(pc.localDescription);
+
+    const qr = await QRCode.toDataURL(fullOffer, { width: 500 });
     setQrImage(qr);
   };
 
+
+
   // -------------------------------------------------------
-  // HANDLE SCANNED OFFER → GENERATE ANSWER
+  // SCANNED OFFER → GENERATE ANSWER
   // -------------------------------------------------------
   const handleOfferFromQr = async (data) => {
     try {
@@ -82,6 +102,11 @@ function App() {
       pc.ondatachannel = (event) => {
         const channel = event.channel;
         channelRef.current = channel;
+
+        channel.onopen = () => {
+          console.log("DataChannel connected ✔");
+        };
+
         channel.onmessage = (e) => receiveChunk(e.data);
       };
 
@@ -90,33 +115,41 @@ function App() {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      const ansText = JSON.stringify(answer);
-      const qr = await QRCode.toDataURL(ansText);
+      await waitForICE(pc);
+
+      const fullAnswer = JSON.stringify(pc.localDescription);
+      const qr = await QRCode.toDataURL(fullAnswer, { width: 500 });
 
       setQrImage(qr);
       setCameraMode(false);
     } catch {
-      alert("Invalid Offer QR");
+      alert("Invalid OFFER QR");
     }
   };
 
+
+
   // -------------------------------------------------------
-  // HANDLE ANSWER → CONNECT
+  // SCANNED ANSWER → FINISH CONNECTION
   // -------------------------------------------------------
   const handleAnswerFromQr = async (data) => {
     try {
       const answer = JSON.parse(data);
       await pcRef.current.setRemoteDescription(answer);
 
-      alert("P2P Connected Successfully!");
+      console.log("WebRTC fully connected ✔");
+      alert("Connection Ready! You can send files.");
+
       setCameraMode(false);
     } catch {
-      alert("Invalid Answer QR");
+      alert("Invalid ANSWER QR");
     }
   };
 
+
+
   // -------------------------------------------------------
-  // SCAN RESULT DECODER
+  // SCAN DECODER
   // -------------------------------------------------------
   const handleScan = (text) => {
     if (text.includes(`"type":"offer"`)) {
@@ -126,37 +159,42 @@ function App() {
     }
   };
 
+
+
   // -------------------------------------------------------
-  // LARGE FILE SENDING (CHUNKS)
+  // SEND LARGE FILE (CHUNKS)
   // -------------------------------------------------------
   const sendLargeFile = async (file) => {
     const channel = channelRef.current;
+
     if (!channel || channel.readyState !== "open") {
-      alert("Connection not ready!");
+      alert("Connection not ready yet!");
       return;
     }
 
-    const chunkSize = 64 * 1024; // 64KB
+    const chunkSize = 64 * 1024;
     const buffer = await file.arrayBuffer();
-    const totalSize = buffer.byteLength;
+    const total = buffer.byteLength;
     let offset = 0;
 
-    while (offset < totalSize) {
-      const chunk = buffer.slice(offset, offset + chunkSize);
+    while (offset < total) {
+      channel.send(buffer.slice(offset, offset + chunkSize));
 
-      channel.send(chunk);
       offset += chunkSize;
 
-      setProgress(Math.floor((offset / totalSize) * 100));
-      await new Promise((res) => setTimeout(res, 2));
+      setProgress(Math.floor((offset / total) * 100));
+
+      await new Promise((res) => setTimeout(res, 1));
     }
 
     channel.send("EOF");
     alert("File Sent Successfully!");
   };
 
+
+
   // -------------------------------------------------------
-  // RECEIVE CHUNKS
+  // RECEIVE CHUNKS + BUILD FILE
   // -------------------------------------------------------
   const receiveChunk = (data) => {
     if (data === "EOF") {
@@ -165,7 +203,7 @@ function App() {
 
       const a = document.createElement("a");
       a.href = url;
-      a.download = "received_file.bin";
+      a.download = "received_file";
       a.click();
 
       URL.revokeObjectURL(url);
@@ -176,12 +214,16 @@ function App() {
     receivedChunks.current.push(data);
   };
 
+
+
+  // -------------------------------------------------------
+  // UI
+  // -------------------------------------------------------
   return (
     <div className="w-full min-h-screen bg-blue-900/50 flex flex-col items-center">
 
-      <h1 className="text-white text-3xl mt-8">QR ➜ WebRTC File Sharing</h1>
+      <h1 className="text-white text-3xl mt-8">🔥 QR ➜ WebRTC File Sharing</h1>
 
-      {/* OFFER BUTTON */}
       <button
         onClick={createOfferQR}
         className="mt-6 bg-green-500 px-6 py-3 rounded-xl text-white"
@@ -189,7 +231,6 @@ function App() {
         Create Offer QR
       </button>
 
-      {/* ENABLE CAMERA */}
       <button
         onClick={() => setCameraMode(true)}
         className="mt-4 bg-purple-600 px-6 py-3 rounded-xl text-white"
@@ -197,7 +238,6 @@ function App() {
         Scan QR With Camera
       </button>
 
-      {/* CAMERA SCANNER */}
       {cameraMode && (
         <CameraScanner
           onScan={(txt) => {
@@ -207,19 +247,16 @@ function App() {
         />
       )}
 
-      {/* QR DISPLAY */}
       {qrImage && (
         <img src={qrImage} className="w-72 bg-white p-4 rounded-xl mt-6" />
       )}
 
-      {/* FILE PICKER */}
       <input
         type="file"
         onChange={(e) => setSelectedFile(e.target.files[0])}
         className="mt-10 text-white"
       />
 
-      {/* FILE PREVIEW */}
       {selectedFile && (
         <div className="text-white mt-3">
           <p>📄 {selectedFile.name}</p>
@@ -227,7 +264,6 @@ function App() {
         </div>
       )}
 
-      {/* SEND BUTTON */}
       {selectedFile && (
         <button
           onClick={() => sendLargeFile(selectedFile)}
@@ -237,7 +273,6 @@ function App() {
         </button>
       )}
 
-      {/* PROGRESS BAR */}
       {progress > 0 && (
         <div className="w-80 bg-gray-300 rounded-full mt-4">
           <div
@@ -246,6 +281,7 @@ function App() {
           ></div>
         </div>
       )}
+
     </div>
   );
 }
