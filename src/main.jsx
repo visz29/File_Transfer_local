@@ -3,10 +3,12 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
 import Share from './Share.jsx'
+import V0 from './V0.jsx'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    {/* <App /> */}
     {/* <Share /> */}
+    <V0 />
   </React.StrictMode>,
 )

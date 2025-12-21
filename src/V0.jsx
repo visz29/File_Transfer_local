@@ -174,7 +174,7 @@ function CameraScanner({ onScan, onClose }) {
 // ===================================================
 // MAIN APP
 // ===================================================
-export default function Page() {
+export default function V0() {
   const [qrImage, setQrImage] = useState("")
   const [cameraMode, setCameraMode] = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
@@ -183,6 +183,8 @@ export default function Page() {
   const [connectionStatus, setConnectionStatus] = useState("disconnected")
   const [receivingFile, setReceivingFile] = useState(null)
   const [sendingFile, setSendingFile] = useState(null)
+  const [manualMode, setManualMode] = useState(false)
+  const [manualInput, setManualInput] = useState("")
 
   const pcRef = useRef(null)
   const channelRef = useRef(null)
@@ -262,12 +264,13 @@ export default function Page() {
   // -------------------------------------------------------
   const createOfferQR = async () => {
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      iceServers: [],
     })
     pcRef.current = pc
 
     const channel = pc.createDataChannel("fileShare", {
       ordered: true,
+      maxPacketLifeTime: 3000,
     })
     channelRef.current = channel
     channel.binaryType = "arraybuffer"
@@ -282,10 +285,11 @@ export default function Page() {
     await pc.setLocalDescription(offer)
     await waitForICE(pc)
 
-    const fullOffer = JSON.stringify(pc.localDescription)
-    console.log(fullOffer);
-    
-    const qr = await QRCode.toDataURL(fullOffer, { width: 400, errorCorrectionLevel: "L" })
+    const compressed = `o|${pc.localDescription.sdp}`
+    const qr = await QRCode.toDataURL(compressed, {
+      width: 400,
+      errorCorrectionLevel: "L",
+    })
     setQrImage(qr)
     setConnectionStatus("waiting")
   }
@@ -295,7 +299,8 @@ export default function Page() {
   // -------------------------------------------------------
   const handleOfferFromQr = async (data) => {
     try {
-      const offer = JSON.parse(data)
+      const [type, sdp] = data.split("|")
+      const offer = { type: type === "o" ? "offer" : "answer", sdp }
 
       const pc = new RTCPeerConnection({
         iceServers: [],
@@ -318,13 +323,17 @@ export default function Page() {
       await pc.setLocalDescription(answer)
       await waitForICE(pc)
 
-      const fullAnswer = JSON.stringify(pc.localDescription)
-      const qr = await QRCode.toDataURL(fullAnswer, { width: 400, errorCorrectionLevel: "L" })
+      const compressed = `a|${pc.localDescription.sdp}`
+      const qr = await QRCode.toDataURL(compressed, {
+        width: 400,
+        errorCorrectionLevel: "L",
+      })
 
       setQrImage(qr)
       setCameraMode(false)
       setConnectionStatus("waiting")
-    } catch {
+    } catch (e) {
+      console.error("Offer error:", e)
       alert("Invalid OFFER QR")
     }
   }
@@ -334,12 +343,15 @@ export default function Page() {
   // -------------------------------------------------------
   const handleAnswerFromQr = async (data) => {
     try {
-      const answer = JSON.parse(data)
+      const [type, sdp] = data.split("|")
+      const answer = { type: type === "a" ? "answer" : "offer", sdp }
+
       await pcRef.current.setRemoteDescription(answer)
       setConnectionStatus("connected")
       setCameraMode(false)
       setQrImage("")
-    } catch {
+    } catch (e) {
+      console.error("Answer error:", e)
       alert("Invalid ANSWER QR")
     }
   }
@@ -348,9 +360,9 @@ export default function Page() {
   // SCAN DECODER
   // -------------------------------------------------------
   const handleScan = (text) => {
-    if (text.includes('"type":"offer"')) {
+    if (text.startsWith("o|")) {
       handleOfferFromQr(text)
-    } else if (text.includes('"type":"answer"')) {
+    } else if (text.startsWith("a|")) {
       handleAnswerFromQr(text)
     }
   }
@@ -376,22 +388,34 @@ export default function Page() {
     })
     channel.send("META:" + metadata)
 
-    const chunkSize = 16 * 1024 // 16KB chunks
-    const buffer = await file.arrayBuffer()
-    const total = buffer.byteLength
+    const chunkSize = 64 * 1024 // 64KB chunks
+    const total = file.size
     let offset = 0
 
+    const readChunk = (start, end) => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = (e) => resolve(e.target.result)
+        reader.onerror = reject
+        reader.readAsArrayBuffer(file.slice(start, end))
+      })
+    }
+
     while (offset < total) {
-      while (channel.bufferedAmount > 1024 * 1024) {
-        await new Promise((res) => setTimeout(res, 50))
+      while (channel.bufferedAmount > 2 * 1024 * 1024) {
+        await new Promise((res) => setTimeout(res, 100))
       }
 
-      const chunk = buffer.slice(offset, offset + chunkSize)
+      const chunk = await readChunk(offset, Math.min(offset + chunkSize, total))
       channel.send(chunk)
-      offset += chunkSize
+      offset += chunk.byteLength
 
-      setSendProgress(Math.floor((offset / total) * 100))
-      await new Promise((res) => setTimeout(res, 1))
+      const progress = (offset / total) * 100
+      setSendProgress(Math.floor(progress))
+
+      if (offset % (chunkSize * 10) === 0) {
+        await new Promise((res) => setTimeout(res, 5))
+      }
     }
 
     channel.send("EOF")
@@ -400,7 +424,24 @@ export default function Page() {
     setTimeout(() => {
       setSendingFile(null)
       setSendProgress(0)
+      setSelectedFile(null)
     }, 2000)
+  }
+
+  const handleManualSubmit = () => {
+    if (!manualInput.trim()) {
+      alert("Please paste the offer or answer text")
+      return
+    }
+    handleScan(manualInput.trim())
+    setManualInput("")
+    setManualMode(false)
+  }
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      alert("Copied to clipboard!")
+    })
   }
 
   // -------------------------------------------------------
@@ -409,7 +450,7 @@ export default function Page() {
   return (
     <div className="w-full min-h-screen bg-background flex flex-col items-center p-6">
       <h1 className="text-foreground text-3xl font-bold mt-8">QR File Transfer</h1>
-      <p className="text-foreground/60 mt-2">Peer-to-peer file sharing via WebRTC</p>
+      <p className="text-foreground/60 mt-2">Peer-to-peer file sharing via WebRTC (Local Network Only)</p>
 
       {/* Connection Status */}
       <div className="mt-4 flex items-center gap-2">
@@ -442,6 +483,14 @@ export default function Page() {
         >
           Scan QR
         </button>
+
+        <button
+          onClick={() => setManualMode(!manualMode)}
+          disabled={connectionStatus === "connected"}
+          className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
+        >
+          Manual Entry
+        </button>
       </div>
 
       {/* Camera Scanner */}
@@ -455,6 +504,38 @@ export default function Page() {
         />
       )}
 
+      {manualMode && (
+        <div className="mt-6 w-full max-w-md bg-muted p-6 rounded-xl">
+          <h3 className="text-foreground font-semibold text-lg mb-3">Manual Entry</h3>
+          <p className="text-foreground/60 text-sm mb-4">
+            Paste the offer or answer text below (format: o|... or a|...)
+          </p>
+          <textarea
+            value={manualInput}
+            onChange={(e) => setManualInput(e.target.value)}
+            placeholder="Paste offer/answer text here..."
+            className="w-full h-32 bg-background text-foreground border border-border rounded-lg p-3 text-sm resize-none"
+          />
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={handleManualSubmit}
+              className="flex-1 bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg text-white font-medium transition-colors"
+            >
+              Submit
+            </button>
+            <button
+              onClick={() => {
+                setManualMode(false)
+                setManualInput("")
+              }}
+              className="flex-1 bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg text-white font-medium transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* QR Code Display */}
       {qrImage && (
         <div className="mt-6">
@@ -462,6 +543,27 @@ export default function Page() {
           <p className="text-foreground/60 text-sm text-center mt-2">
             {connectionStatus === "waiting" ? "Scan this QR with another device" : "QR Code Ready"}
           </p>
+          <button
+            onClick={() => {
+              const canvas = document.createElement("canvas")
+              const ctx = canvas.getContext("2d")
+              const img = new Image()
+              img.onload = () => {
+                canvas.width = img.width
+                canvas.height = img.height
+                ctx.drawImage(img, 0, 0)
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+                const code = jsQR(imageData.data, imageData.width, imageData.height)
+                if (code) {
+                  copyToClipboard(code.data)
+                }
+              }
+              img.src = qrImage
+            }}
+            className="mt-3 w-full bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors"
+          >
+            Copy as Text
+          </button>
         </div>
       )}
 
