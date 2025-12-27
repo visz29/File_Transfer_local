@@ -8,7 +8,7 @@ import V0 from './V0.jsx'
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <App />
-    <Share />
+    {/* <Share /> */}
     {/* <V0 /> */}
   </React.StrictMode>,
 )
