@@ -4,6 +4,12 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import QRCode from "qrcode"
 import jsQR from "jsqr"
 
+const setNetworkMode = (mode) => {
+  // This function will be used to update the networkMode state
+  // For now, it's a placeholder as the actual state update should be handled by React
+  console.log("Setting network mode to:", mode)
+}
+
 // ----------------------
 // PROGRESS BAR COMPONENT
 // ----------------------
@@ -174,8 +180,9 @@ function CameraScanner({ onScan, onClose }) {
 // ===================================================
 // MAIN APP
 // ===================================================
-export default function V0() {
+export default function Page() {
   const [qrImage, setQrImage] = useState("")
+  const [qrText, setQrText] = useState("")
   const [cameraMode, setCameraMode] = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
   const [sendProgress, setSendProgress] = useState(0)
@@ -185,6 +192,7 @@ export default function V0() {
   const [sendingFile, setSendingFile] = useState(null)
   const [manualMode, setManualMode] = useState(false)
   const [manualInput, setManualInput] = useState("")
+  const [networkMode, setNetworkMode] = useState("local")
 
   const pcRef = useRef(null)
   const channelRef = useRef(null)
@@ -192,7 +200,15 @@ export default function V0() {
   const fileMetaRef = useRef(null)
   const receivedSizeRef = useRef(0)
 
-  // ICE COMPLETE PROMISE
+  const getRTCConfig = useCallback(() => {
+    if (networkMode === "local") {
+      return { iceServers: [] }
+    }
+    return {
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }],
+    }
+  }, [networkMode])
+
   const waitForICE = useCallback((pc) => {
     return new Promise((resolve) => {
       if (pc.iceGatheringState === "complete") return resolve()
@@ -202,13 +218,8 @@ export default function V0() {
     })
   }, [])
 
-  // -------------------------------------------------------
-  // RECEIVE CHUNKS + BUILD FILE
-  // -------------------------------------------------------
   const receiveChunk = useCallback((data) => {
-    // Handle string messages (metadata or EOF)
     if (typeof data === "string") {
-      // Check for metadata
       if (data.startsWith("META:")) {
         try {
           const meta = JSON.parse(data.slice(5))
@@ -223,7 +234,6 @@ export default function V0() {
         }
       }
 
-      // Check for EOF
       if (data === "EOF") {
         const meta = fileMetaRef.current || { name: "received_file", type: "application/octet-stream" }
         const blob = new Blob(receivedChunks.current, { type: meta.type })
@@ -248,7 +258,6 @@ export default function V0() {
       }
     }
 
-    // Handle binary data
     receivedChunks.current.push(data)
 
     if (fileMetaRef.current) {
@@ -259,13 +268,8 @@ export default function V0() {
     }
   }, [])
 
-  // -------------------------------------------------------
-  // CREATE OFFER → QR
-  // -------------------------------------------------------
   const createOfferQR = async () => {
-    const pc = new RTCPeerConnection({
-      iceServers: [],
-    })
+    const pc = new RTCPeerConnection(getRTCConfig())
     pcRef.current = pc
 
     const channel = pc.createDataChannel("fileShare", {
@@ -286,6 +290,7 @@ export default function V0() {
     await waitForICE(pc)
 
     const compressed = `o|${pc.localDescription.sdp}`
+    setQrText(compressed)
     const qr = await QRCode.toDataURL(compressed, {
       width: 400,
       errorCorrectionLevel: "L",
@@ -294,17 +299,30 @@ export default function V0() {
     setConnectionStatus("waiting")
   }
 
-  // -------------------------------------------------------
-  // SCANNED OFFER → GENERATE ANSWER
-  // -------------------------------------------------------
   const handleOfferFromQr = async (data) => {
     try {
-      const [type, sdp] = data.split("|")
-      const offer = { type: type === "o" ? "offer" : "answer", sdp }
+      if (!data || typeof data !== "string") {
+        throw new Error("Invalid data format")
+      }
 
-      const pc = new RTCPeerConnection({
-        iceServers: [],
-      })
+      const parts = data.split("|")
+      if (parts.length !== 2) {
+        throw new Error("Invalid format - must contain exactly one | separator")
+      }
+
+      const [type, sdp] = parts
+
+      if (type !== "o") {
+        throw new Error("Expected offer (o|...) but got something else")
+      }
+
+      if (!sdp || sdp.length < 50) {
+        throw new Error("SDP data too short or missing")
+      }
+
+      const offer = { type: "offer", sdp }
+
+      const pc = new RTCPeerConnection(getRTCConfig())
       pcRef.current = pc
 
       pc.ondatachannel = (event) => {
@@ -324,6 +342,7 @@ export default function V0() {
       await waitForICE(pc)
 
       const compressed = `a|${pc.localDescription.sdp}`
+      setQrText(compressed)
       const qr = await QRCode.toDataURL(compressed, {
         width: 400,
         errorCorrectionLevel: "L",
@@ -334,42 +353,58 @@ export default function V0() {
       setConnectionStatus("waiting")
     } catch (e) {
       console.error("Offer error:", e)
-      alert("Invalid OFFER QR")
+      alert(`Invalid OFFER: ${e.message}`)
     }
   }
 
-  // -------------------------------------------------------
-  // SCANNED ANSWER → FINISH CONNECTION
-  // -------------------------------------------------------
   const handleAnswerFromQr = async (data) => {
     try {
-      const [type, sdp] = data.split("|")
-      const answer = { type: type === "a" ? "answer" : "offer", sdp }
+      if (!data || typeof data !== "string") {
+        throw new Error("Invalid data format")
+      }
+
+      const parts = data.split("|")
+      if (parts.length !== 2) {
+        throw new Error("Invalid format - must contain exactly one | separator")
+      }
+
+      const [type, sdp] = parts
+
+      if (type !== "a") {
+        throw new Error("Expected answer (a|...) but got something else")
+      }
+
+      if (!sdp || sdp.length < 50) {
+        throw new Error("SDP data too short or missing")
+      }
+
+      const answer = { type: "answer", sdp }
+
+      if (!pcRef.current) {
+        throw new Error("No peer connection. Create an offer first!")
+      }
 
       await pcRef.current.setRemoteDescription(answer)
       setConnectionStatus("connected")
       setCameraMode(false)
       setQrImage("")
+      setQrText("")
     } catch (e) {
       console.error("Answer error:", e)
-      alert("Invalid ANSWER QR")
+      alert(`Invalid ANSWER: ${e.message}`)
     }
   }
 
-  // -------------------------------------------------------
-  // SCAN DECODER
-  // -------------------------------------------------------
   const handleScan = (text) => {
     if (text.startsWith("o|")) {
       handleOfferFromQr(text)
     } else if (text.startsWith("a|")) {
       handleAnswerFromQr(text)
+    } else {
+      alert("Invalid QR code format. Must start with 'o|' or 'a|'")
     }
   }
 
-  // -------------------------------------------------------
-  // SEND LARGE FILE (CHUNKS)
-  // -------------------------------------------------------
   const sendLargeFile = async (file) => {
     const channel = channelRef.current
 
@@ -388,7 +423,7 @@ export default function V0() {
     })
     channel.send("META:" + metadata)
 
-    const chunkSize = 64 * 1024 // 64KB chunks
+    const chunkSize = 64 * 1024
     const total = file.size
     let offset = 0
 
@@ -429,30 +464,79 @@ export default function V0() {
   }
 
   const handleManualSubmit = () => {
-    if (!manualInput.trim()) {
+    const trimmed = manualInput.trim()
+
+    if (!trimmed) {
       alert("Please paste the offer or answer text")
       return
     }
-    handleScan(manualInput.trim())
+
+    if (!trimmed.includes("|")) {
+      alert("Invalid format. Text must contain | separator (e.g., o|sdp... or a|sdp...)")
+      return
+    }
+
+    const [type] = trimmed.split("|")
+    if (type !== "o" && type !== "a") {
+      alert("Invalid format. Text must start with 'o|' (offer) or 'a|' (answer)")
+      return
+    }
+
+    handleScan(trimmed)
     setManualInput("")
     setManualMode(false)
   }
 
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text).then(() => {
-      alert("Copied to clipboard!")
-    })
+  const copyToClipboard = () => {
+    if (!qrText) {
+      alert("No QR text available to copy")
+      return
+    }
+
+    navigator.clipboard
+      .writeText(qrText)
+      .then(() => {
+        alert("Copied to clipboard!")
+      })
+      .catch(() => {
+        alert("Failed to copy. Please try again.")
+      })
   }
 
-  // -------------------------------------------------------
-  // UI
-  // -------------------------------------------------------
   return (
     <div className="w-full min-h-screen bg-background flex flex-col items-center p-6">
       <h1 className="text-foreground text-3xl font-bold mt-8">QR File Transfer</h1>
-      <p className="text-foreground/60 mt-2">Peer-to-peer file sharing via WebRTC (Local Network Only)</p>
+      <p className="text-foreground/60 mt-2">Peer-to-peer file sharing via WebRTC (up to 5GB)</p>
 
-      {/* Connection Status */}
+      <div className="mt-6 flex gap-2 bg-muted p-1 rounded-lg">
+        <button
+          onClick={() => setNetworkMode("local")}
+          className={`px-6 py-2 rounded-md font-medium transition-colors ${
+            networkMode === "local"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-foreground/60 hover:text-foreground"
+          }`}
+        >
+          Local Network
+        </button>
+        <button
+          onClick={() => setNetworkMode("internet")}
+          className={`px-6 py-2 rounded-md font-medium transition-colors ${
+            networkMode === "internet"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-foreground/60 hover:text-foreground"
+          }`}
+        >
+          Internet
+        </button>
+      </div>
+
+      <p className="text-foreground/50 text-xs mt-2 text-center max-w-md">
+        {networkMode === "local"
+          ? "Both devices must be on the same WiFi/LAN"
+          : "Share files across different networks (uses STUN servers)"}
+      </p>
+
       <div className="mt-4 flex items-center gap-2">
         <div
           className={`w-3 h-3 rounded-full ${
@@ -466,12 +550,11 @@ export default function V0() {
         <span className="text-foreground/80 text-sm capitalize">{connectionStatus}</span>
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex gap-4 mt-6">
+      <div className="flex gap-4 mt-6 flex-wrap justify-center">
         <button
           onClick={createOfferQR}
           disabled={connectionStatus === "connected"}
-          className="bg-green-600 hover:bg-green-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
+          className="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-xl text-white font-medium transition-colors"
         >
           Create Offer QR
         </button>
@@ -479,21 +562,19 @@ export default function V0() {
         <button
           onClick={() => setCameraMode(true)}
           disabled={connectionStatus === "connected"}
-          className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
+          className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-xl text-white font-medium transition-colors"
         >
           Scan QR
         </button>
 
         <button
           onClick={() => setManualMode(!manualMode)}
-          disabled={connectionStatus === "connected"}
-          className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
+          className="bg-orange-600 hover:bg-orange-700 px-6 py-3 rounded-xl text-white font-medium transition-colors"
         >
-          Manual Entry
+          {manualMode ? "Hide Manual" : "Manual Entry"}
         </button>
       </div>
 
-      {/* Camera Scanner */}
       {cameraMode && (
         <CameraScanner
           onScan={(txt) => {
@@ -506,29 +587,27 @@ export default function V0() {
 
       {manualMode && (
         <div className="mt-6 w-full max-w-md bg-muted p-6 rounded-xl">
-          <h3 className="text-foreground font-semibold text-lg mb-3">Manual Entry</h3>
-          <p className="text-foreground/60 text-sm mb-4">
-            Paste the offer or answer text below (format: o|... or a|...)
-          </p>
+          <h3 className="text-foreground font-semibold text-lg mb-2">Manual Entry</h3>
+          <p className="text-foreground/60 text-sm mb-4">Paste the offer or answer text below (starts with o| or a|)</p>
           <textarea
             value={manualInput}
             onChange={(e) => setManualInput(e.target.value)}
             placeholder="Paste offer/answer text here..."
-            className="w-full h-32 bg-background text-foreground border border-border rounded-lg p-3 text-sm resize-none"
+            className="w-full h-32 bg-background text-foreground border border-border rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <div className="flex gap-3 mt-4">
             <button
               onClick={handleManualSubmit}
               className="flex-1 bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg text-white font-medium transition-colors"
             >
-              Submit
+              Connect
             </button>
             <button
               onClick={() => {
                 setManualMode(false)
                 setManualInput("")
               }}
-              className="flex-1 bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg text-white font-medium transition-colors"
+              className="flex-1 bg-muted-foreground/20 hover:bg-muted-foreground/30 px-4 py-2 rounded-lg text-foreground font-medium transition-colors"
             >
               Cancel
             </button>
@@ -536,63 +615,51 @@ export default function V0() {
         </div>
       )}
 
-      {/* QR Code Display */}
       {qrImage && (
-        <div className="mt-6">
-          <img src={qrImage || "/placeholder.svg"} alt="QR Code" className="w-72 bg-white p-4 rounded-xl" />
-          <p className="text-foreground/60 text-sm text-center mt-2">
+        <div className="mt-6 flex flex-col items-center">
+          <img src={qrImage || "/placeholder.svg"} alt="QR Code" className="w-72 bg-white p-4 rounded-xl shadow-lg" />
+          <p className="text-foreground/60 text-sm text-center mt-3">
             {connectionStatus === "waiting" ? "Scan this QR with another device" : "QR Code Ready"}
           </p>
           <button
-            onClick={() => {
-              const canvas = document.createElement("canvas")
-              const ctx = canvas.getContext("2d")
-              const img = new Image()
-              img.onload = () => {
-                canvas.width = img.width
-                canvas.height = img.height
-                ctx.drawImage(img, 0, 0)
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-                const code = jsQR(imageData.data, imageData.width, imageData.height)
-                if (code) {
-                  copyToClipboard(code.data)
-                }
-              }
-              img.src = qrImage
-            }}
-            className="mt-3 w-full bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors"
+            onClick={copyToClipboard}
+            className="mt-3 bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg text-white text-sm font-medium transition-colors"
           >
             Copy as Text
           </button>
         </div>
       )}
 
-      {/* File Selection */}
       {connectionStatus === "connected" && (
-        <div className="mt-8 flex flex-col items-center">
-          <label className="cursor-pointer bg-muted hover:bg-muted/80 px-6 py-3 rounded-xl text-foreground font-medium transition-colors">
-            Select File
-            <input type="file" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} className="hidden" />
-          </label>
-
-          {selectedFile && (
-            <div className="mt-4 text-center">
-              <p className="text-foreground font-medium">{selectedFile.name}</p>
-              <p className="text-foreground/60 text-sm">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
-
-              <button
-                onClick={() => sendLargeFile(selectedFile)}
-                disabled={sendProgress > 0 && sendProgress < 100}
-                className="mt-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
-              >
-                Send File
-              </button>
+        <div className="mt-8 w-full max-w-md">
+          <label className="block bg-muted rounded-xl p-6 cursor-pointer hover:bg-muted/80 transition-colors">
+            <div className="flex flex-col items-center gap-2">
+              <svg className="w-12 h-12 text-foreground/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                />
+              </svg>
+              <span className="text-foreground font-medium">Click to select file</span>
+              <span className="text-foreground/60 text-sm">Up to 5GB supported</span>
             </div>
-          )}
+            <input
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) {
+                  setSelectedFile(file)
+                  sendLargeFile(file)
+                }
+              }}
+            />
+          </label>
         </div>
       )}
 
-      {/* Send Progress */}
       {sendingFile && (
         <ProgressBar
           progress={sendProgress}
@@ -601,7 +668,6 @@ export default function V0() {
         />
       )}
 
-      {/* Receive Progress */}
       {receivingFile && (
         <ProgressBar
           progress={receiveProgress}

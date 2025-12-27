@@ -4,37 +4,30 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import QRCode from "qrcode"
 import jsQR from "jsqr"
 
-// ----------------------
-// PROGRESS BAR COMPONENT
-// ----------------------
 function ProgressBar({ progress, label, fileName }) {
   const isComplete = progress >= 100
 
   return (
-    <div className="w-full max-w-md mt-4">
-      {fileName && <p className="text-foreground/80 text-sm mb-1 truncate">{fileName}</p>}
+    <div className="w-full mt-4">
+      {fileName && <p className="text-sm font-medium mb-2 truncate text-white">{fileName}</p>}
       <div className="flex items-center gap-3">
-        <div className="flex-1 h-4 bg-muted rounded-full overflow-hidden">
+        <div className="flex-1 h-3 bg-gray-700 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all duration-300 ${isComplete ? "bg-green-500" : "bg-blue-500"}`}
             style={{ width: `${Math.min(progress, 100)}%` }}
           />
         </div>
-        <span className="text-foreground text-sm font-medium w-12 text-right">{Math.round(progress)}%</span>
+        <span className="text-sm font-medium w-12 text-right text-white">{Math.round(progress)}%</span>
       </div>
-      {label && <p className="text-foreground/60 text-xs mt-1">{label}</p>}
+      {label && <p className="text-xs mt-2 text-gray-300">{label}</p>}
     </div>
   )
 }
 
-// ----------------------
-// CAMERA QR SCANNER - Fixed scanner with proper video loading and debugging
-// ----------------------
 function CameraScanner({ onScan, onClose }) {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
-  const animationRef = useRef(null)
   const [scanStatus, setScanStatus] = useState("Initializing camera...")
   const [hasCamera, setHasCamera] = useState(true)
 
@@ -44,7 +37,6 @@ function CameraScanner({ onScan, onClose }) {
 
     const startCamera = async () => {
       try {
-        // Request camera permission
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "environment",
@@ -63,7 +55,6 @@ function CameraScanner({ onScan, onClose }) {
         if (videoRef.current) {
           videoRef.current.srcObject = stream
 
-          // Wait for video to be ready
           videoRef.current.onloadedmetadata = () => {
             if (!mounted) return
             videoRef.current
@@ -82,56 +73,43 @@ function CameraScanner({ onScan, onClose }) {
       } catch (err) {
         console.error("Camera error:", err)
         setHasCamera(false)
-        setScanStatus("Camera access denied or unavailable")
+        setScanStatus("Camera access denied")
       }
     }
 
     const scanQR = () => {
       if (!mounted || !scanning) return
 
-      const video = videoRef.current
       const canvas = canvasRef.current
+      const video = videoRef.current
 
-      if (!video || !canvas) {
-        animationRef.current = requestAnimationFrame(scanQR)
-        return
-      }
-
-      const ctx = canvas.getContext("2d", { willReadFrequently: true })
-
-      if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+      if (canvas && video && video.readyState === video.HAVE_ENOUGH_DATA) {
         canvas.width = video.videoWidth
         canvas.height = video.videoHeight
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        const ctx = canvas.getContext("2d", { willReadFrequently: true })
 
-        try {
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-          const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: "dontInvert",
-          })
+          const code = jsQR(imageData.data, imageData.width, imageData.height)
 
-          if (code && code.data) {
-            setScanStatus("QR Code found!")
+          if (code) {
             scanning = false
             onScan(code.data)
             return
           }
-        } catch (e) {
-          console.error("Scan error:", e)
         }
       }
 
-      animationRef.current = requestAnimationFrame(scanQR)
+      if (mounted && scanning) {
+        requestAnimationFrame(scanQR)
+      }
     }
 
     startCamera()
 
     return () => {
       mounted = false
-      scanning = false
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current)
-      }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
       }
@@ -139,58 +117,73 @@ function CameraScanner({ onScan, onClose }) {
   }, [onScan])
 
   return (
-    <div className="relative mt-6 flex flex-col items-center">
-      {hasCamera ? (
-        <>
-          <video ref={videoRef} className="w-80 h-80 bg-black rounded-xl object-cover" playsInline muted autoPlay />
-          <canvas ref={canvasRef} className="hidden" />
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="w-48 h-48 border-2 border-white/50 rounded-lg">
-              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-green-400 rounded-tl-lg" />
-              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-green-400 rounded-tr-lg" />
-              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-green-400 rounded-bl-lg" />
-              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-green-400 rounded-br-lg" />
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+      <div className="bg-slate-900 p-6 rounded-2xl max-w-md w-full mx-4">
+        <h3 className="text-xl font-bold text-white mb-4">Scan QR Code</h3>
+
+        {hasCamera ? (
+          <>
+            <div className="relative bg-black rounded-xl overflow-hidden mb-4">
+              <video ref={videoRef} className="w-full aspect-video" />
+              <canvas ref={canvasRef} className="hidden" />
+              <div className="absolute inset-0 border-2 border-green-500 rounded-xl pointer-events-none">
+                <div className="absolute top-1/4 left-1/4 w-8 h-8 border-t-2 border-l-2 border-green-500"></div>
+                <div className="absolute top-1/4 right-1/4 w-8 h-8 border-t-2 border-r-2 border-green-500"></div>
+                <div className="absolute bottom-1/4 left-1/4 w-8 h-8 border-b-2 border-l-2 border-green-500"></div>
+                <div className="absolute bottom-1/4 right-1/4 w-8 h-8 border-b-2 border-r-2 border-green-500"></div>
+              </div>
             </div>
-          </div>
-        </>
-      ) : (
-        <div className="w-80 h-80 bg-muted rounded-xl flex items-center justify-center">
-          <p className="text-foreground/60 text-center px-4">Camera not available. Please check permissions.</p>
-        </div>
-      )}
+            <p className="text-sm text-gray-300 text-center mb-4">{scanStatus}</p>
+          </>
+        ) : (
+          <p className="text-red-400 text-center mb-4">{scanStatus}</p>
+        )}
 
-      <p className="text-foreground/80 text-sm mt-3">{scanStatus}</p>
-
-      <button
-        onClick={onClose}
-        className="mt-3 bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm transition-colors"
-      >
-        Close Scanner
-      </button>
+        <button
+          onClick={onClose}
+          className="w-full bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-white font-medium"
+        >
+          Close
+        </button>
+      </div>
     </div>
   )
 }
 
-// ===================================================
-// MAIN APP
-// ===================================================
+// All type annotations removed
 export default function Page() {
   const [qrImage, setQrImage] = useState("")
+  const [qrText, setQrText] = useState("")
   const [cameraMode, setCameraMode] = useState(false)
-  const [selectedFile, setSelectedFile] = useState(null)
-  const [sendProgress, setSendProgress] = useState(0)
-  const [receiveProgress, setReceiveProgress] = useState(0)
+  const [selectedFiles, setSelectedFiles] = useState([])
+  const [sendProgress, setSendProgress] = useState({})
+  const [receiveProgress, setReceiveProgress] = useState({})
   const [connectionStatus, setConnectionStatus] = useState("disconnected")
-  const [receivingFile, setReceivingFile] = useState(null)
-  const [sendingFile, setSendingFile] = useState(null)
+  const [receivingFiles, setReceivingFiles] = useState({})
+  const [sendingFiles, setSendingFiles] = useState({})
+  const [manualMode, setManualMode] = useState(false)
+  const [manualInput, setManualInput] = useState("")
+  const [networkMode, setNetworkMode] = useState("local")
+  const [mode, setMode] = useState("idle")
+  const [imageScanMode, setImageScanMode] = useState(false)
+  const [imageScanStatus, setImageScanStatus] = useState("")
+  const [imageScanError, setImageScanError] = useState("")
 
   const pcRef = useRef(null)
   const channelRef = useRef(null)
-  const receivedChunks = useRef([])
-  const fileMetaRef = useRef(null)
-  const receivedSizeRef = useRef(0)
+  const receivedChunks = useRef({})
+  const fileMetaRef = useRef({})
+  const receivedSizeRef = useRef({})
 
-  // ICE COMPLETE PROMISE
+  const getRTCConfig = useCallback(() => {
+    if (networkMode === "local") {
+      return { iceServers: [] }
+    }
+    return {
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }],
+    }
+  }, [networkMode])
+
   const waitForICE = useCallback((pc) => {
     return new Promise((resolve) => {
       if (pc.iceGatheringState === "complete") return resolve()
@@ -200,80 +193,71 @@ export default function Page() {
     })
   }, [])
 
-  // -------------------------------------------------------
-  // RECEIVE CHUNKS + BUILD FILE
-  // -------------------------------------------------------
   const receiveChunk = useCallback((data) => {
-    // Handle string messages (metadata or EOF)
-    if (typeof data === "string") {
-      // Check for metadata
-      if (data.startsWith("META:")) {
-        try {
-          const meta = JSON.parse(data.slice(5))
-          fileMetaRef.current = meta
-          receivedChunks.current = []
-          receivedSizeRef.current = 0
-          setReceivingFile(meta.name)
-          setReceiveProgress(0)
-          return
-        } catch (e) {
-          console.error("Failed to parse metadata:", e)
+    try {
+      const str = typeof data === "string" ? data : new TextDecoder().decode(new Uint8Array(data.slice(0, 100)))
+
+      if (typeof data === "string" && data.startsWith("META:")) {
+        const metaStr = data.slice(5)
+        const meta = JSON.parse(metaStr)
+        fileMetaRef.current[meta.name] = meta
+        receivedChunks.current[meta.name] = []
+        receivedSizeRef.current[meta.name] = 0
+        setReceivingFiles((prev) => ({ ...prev, [meta.name]: meta }))
+        setReceiveProgress((prev) => ({ ...prev, [meta.name]: 0 }))
+      } else {
+        const fileName = Object.keys(fileMetaRef.current).find(
+          (name) => !receivedChunks.current[name] || receivedChunks.current[name].length > 0,
+        )
+        if (fileName) {
+          receivedChunks.current[fileName].push(new Uint8Array(data))
+          receivedSizeRef.current[fileName] = (receivedSizeRef.current[fileName] || 0) + data.byteLength
+
+          const meta = fileMetaRef.current[fileName]
+          const progress = (receivedSizeRef.current[fileName] / meta.size) * 100
+          setReceiveProgress((prev) => ({ ...prev, [fileName]: progress }))
+
+          if (progress >= 100) {
+            const blob = new Blob(receivedChunks.current[fileName], { type: meta.type })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            a.download = meta.name
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+
+            setReceiveProgress((prev) => ({ ...prev, [fileName]: 100 }))
+            setTimeout(() => {
+              setReceivingFiles((prev) => {
+                const newFiles = { ...prev }
+                delete newFiles[fileName]
+                return newFiles
+              })
+            }, 2000)
+          }
         }
       }
-
-      // Check for EOF
-      if (data === "EOF") {
-        const meta = fileMetaRef.current || { name: "received_file", type: "application/octet-stream" }
-        const blob = new Blob(receivedChunks.current, { type: meta.type })
-        const url = URL.createObjectURL(blob)
-
-        const a = document.createElement("a")
-        a.href = url
-        a.download = meta.name
-        a.click()
-
-        URL.revokeObjectURL(url)
-        receivedChunks.current = []
-        fileMetaRef.current = null
-        receivedSizeRef.current = 0
-        setReceiveProgress(100)
-
-        setTimeout(() => {
-          setReceivingFile(null)
-          setReceiveProgress(0)
-        }, 2000)
-        return
-      }
-    }
-
-    // Handle binary data
-    receivedChunks.current.push(data)
-
-    if (fileMetaRef.current) {
-      const chunkSize = data.byteLength || data.size || 0
-      receivedSizeRef.current += chunkSize
-      const progress = (receivedSizeRef.current / fileMetaRef.current.size) * 100
-      setReceiveProgress(Math.min(progress, 99))
+    } catch (error) {
+      console.error("Error receiving chunk:", error)
     }
   }, [])
 
-  // -------------------------------------------------------
-  // CREATE OFFER → QR
-  // -------------------------------------------------------
   const createOfferQR = async () => {
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    })
+    const pc = new RTCPeerConnection(getRTCConfig())
     pcRef.current = pc
 
     const channel = pc.createDataChannel("fileShare", {
       ordered: true,
+      maxPacketLifeTime: 3000,
     })
     channelRef.current = channel
     channel.binaryType = "arraybuffer"
 
     channel.onopen = () => {
       setConnectionStatus("connected")
+      setMode("sender")
     }
     channel.onerror = (e) => console.error("Channel error:", e)
     channel.onmessage = (e) => receiveChunk(e.data)
@@ -282,231 +266,451 @@ export default function Page() {
     await pc.setLocalDescription(offer)
     await waitForICE(pc)
 
-    const fullOffer = JSON.stringify(pc.localDescription)
-    console.log(fullOffer);
-    
-    const qr = await QRCode.toDataURL(fullOffer, { width: 400, errorCorrectionLevel: "L" })
+    const compressed = `o|${pc.localDescription.sdp}`
+    setQrText(compressed)
+    const qr = await QRCode.toDataURL(compressed, {
+      width: 400,
+      errorCorrectionLevel: "L",
+    })
     setQrImage(qr)
-    setConnectionStatus("waiting")
+    setConnectionStatus("waiting for scan")
   }
 
-  // -------------------------------------------------------
-  // SCANNED OFFER → GENERATE ANSWER
-  // -------------------------------------------------------
-  const handleOfferFromQr = async (data) => {
-    try {
-      const offer = JSON.parse(data)
+  const sendFiles = async () => {
+    const channel = channelRef.current
 
-      const pc = new RTCPeerConnection({
-        iceServers: [],
+    if (!channel || channel.readyState !== "open") {
+      alert("Connection not ready!")
+      return
+    }
+
+    for (const file of selectedFiles) {
+      setSendingFiles((prev) => ({ ...prev, [file.name]: true }))
+      setSendProgress((prev) => ({ ...prev, [file.name]: 0 }))
+
+      const metadata = JSON.stringify({
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        size: file.size,
       })
+      channel.send("META:" + metadata)
+
+      const chunkSize = 64 * 1024
+      const total = file.size
+      let offset = 0
+
+      const readChunk = (start, end) => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = (e) => resolve(e.target.result)
+          reader.onerror = reject
+          reader.readAsArrayBuffer(file.slice(start, end))
+        })
+      }
+
+      while (offset < total) {
+        const end = Math.min(offset + chunkSize, total)
+        const chunk = await readChunk(offset, end)
+
+        if (channel.bufferedAmount > 1024 * 1024) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+
+        channel.send(chunk)
+        offset = end
+
+        const progress = (offset / total) * 100
+        setSendProgress((prev) => ({ ...prev, [file.name]: progress }))
+      }
+
+      setTimeout(() => {
+        setSendingFiles((prev) => {
+          const newFiles = { ...prev }
+          delete newFiles[file.name]
+          return newFiles
+        })
+      }, 2000)
+    }
+
+    setSelectedFiles([])
+  }
+
+  const handleOfferFromQr = async (text) => {
+    try {
+      const sdp = text.slice(2)
+      const pc = new RTCPeerConnection(getRTCConfig())
       pcRef.current = pc
 
-      pc.ondatachannel = (event) => {
-        const channel = event.channel
+      pc.ondatachannel = (e) => {
+        const channel = e.channel
         channelRef.current = channel
         channel.binaryType = "arraybuffer"
-
         channel.onopen = () => {
           setConnectionStatus("connected")
+          setMode("receiver")
         }
+        channel.onerror = (err) => console.error("Channel error:", err)
         channel.onmessage = (e) => receiveChunk(e.data)
       }
 
+      const offer = new RTCSessionDescription({ type: "offer", sdp })
       await pc.setRemoteDescription(offer)
+
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
       await waitForICE(pc)
 
-      const fullAnswer = JSON.stringify(pc.localDescription)
-      const qr = await QRCode.toDataURL(fullAnswer, { width: 400, errorCorrectionLevel: "L" })
-
+      const compressed = `a|${pc.localDescription.sdp}`
+      setQrText(compressed)
+      const qr = await QRCode.toDataURL(compressed, {
+        width: 400,
+        errorCorrectionLevel: "L",
+      })
       setQrImage(qr)
-      setCameraMode(false)
-      setConnectionStatus("waiting")
-    } catch {
-      alert("Invalid OFFER QR")
+      setConnectionStatus("Share this answer QR")
+    } catch (error) {
+      console.error("Offer error:", error)
+      alert("Invalid offer: " + error.message)
     }
   }
 
-  // -------------------------------------------------------
-  // SCANNED ANSWER → FINISH CONNECTION
-  // -------------------------------------------------------
-  const handleAnswerFromQr = async (data) => {
+  const handleAnswerFromQr = async (text) => {
     try {
-      const answer = JSON.parse(data)
-      await pcRef.current.setRemoteDescription(answer)
+      const sdp = text.slice(2)
+      const pc = pcRef.current
+
+      if (!pc) {
+        alert("No offer created yet!")
+        return
+      }
+
+      const answer = new RTCSessionDescription({ type: "answer", sdp })
+      await pc.setRemoteDescription(answer)
       setConnectionStatus("connected")
-      setCameraMode(false)
-      setQrImage("")
-    } catch {
-      alert("Invalid ANSWER QR")
+    } catch (error) {
+      console.error("Answer error:", error)
+      alert("Invalid answer: " + error.message)
     }
   }
 
-  // -------------------------------------------------------
-  // SCAN DECODER
-  // -------------------------------------------------------
   const handleScan = (text) => {
-    if (text.includes('"type":"offer"')) {
+    if (text.startsWith("o|")) {
       handleOfferFromQr(text)
-    } else if (text.includes('"type":"answer"')) {
+    } else if (text.startsWith("a|")) {
       handleAnswerFromQr(text)
+    } else {
+      alert("Invalid QR code format")
     }
   }
 
-  // -------------------------------------------------------
-  // SEND LARGE FILE (CHUNKS)
-  // -------------------------------------------------------
-  const sendLargeFile = async (file) => {
-    const channel = channelRef.current
-
-    if (!channel || channel.readyState !== "open") {
-      alert("Connection not ready yet!")
+  const handleManualSubmit = () => {
+    const trimmedInput = manualInput.trim()
+    if (!trimmedInput) {
+      setImageScanError("Please enter a valid QR code")
       return
     }
 
-    setSendingFile(file.name)
-    setSendProgress(0)
-
-    const metadata = JSON.stringify({
-      name: file.name,
-      type: file.type || "application/octet-stream",
-      size: file.size,
-    })
-    channel.send("META:" + metadata)
-
-    const chunkSize = 16 * 1024 // 16KB chunks
-    const buffer = await file.arrayBuffer()
-    const total = buffer.byteLength
-    let offset = 0
-
-    while (offset < total) {
-      while (channel.bufferedAmount > 1024 * 1024) {
-        await new Promise((res) => setTimeout(res, 50))
-      }
-
-      const chunk = buffer.slice(offset, offset + chunkSize)
-      channel.send(chunk)
-      offset += chunkSize
-
-      setSendProgress(Math.floor((offset / total) * 100))
-      await new Promise((res) => setTimeout(res, 1))
+    if (!trimmedInput.startsWith("o|") && !trimmedInput.startsWith("a|")) {
+      setImageScanError("Invalid format. Must start with 'o|' or 'a|'")
+      return
     }
 
-    channel.send("EOF")
-    setSendProgress(100)
-
-    setTimeout(() => {
-      setSendingFile(null)
-      setSendProgress(0)
-    }, 2000)
+    setImageScanError("")
+    handleScan(trimmedInput)
+    setManualInput("")
+    setManualMode(false)
   }
 
-  // -------------------------------------------------------
-  // UI
-  // -------------------------------------------------------
+  const handleImageScan = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setImageScanStatus("Processing image...")
+    setImageScanError("")
+
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      try {
+        const img = new Image()
+        img.crossOrigin = "anonymous"
+        img.onload = () => {
+          const canvas = document.createElement("canvas")
+          canvas.width = img.width
+          canvas.height = img.height
+          const ctx = canvas.getContext("2d")
+
+          if (!ctx) {
+            setImageScanError("Failed to process image")
+            setImageScanStatus("")
+            return
+          }
+
+          ctx.drawImage(img, 0, 0)
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const code = jsQR(imageData.data, imageData.width, imageData.height)
+
+          if (code) {
+            setImageScanStatus("")
+            setImageScanError("")
+            handleScan(code.data)
+            setImageScanMode(false)
+          } else {
+            setImageScanError("No QR code found in image")
+            setImageScanStatus("")
+          }
+        }
+        img.onerror = () => {
+          setImageScanError("Failed to load image")
+          setImageScanStatus("")
+        }
+        img.src = event.target.result
+      } catch (error) {
+        setImageScanError("Error processing image: " + error.message)
+        setImageScanStatus("")
+      }
+    }
+    reader.onerror = () => {
+      setImageScanError("Failed to read file")
+      setImageScanStatus("")
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(qrText)
+    alert("Copied to clipboard!")
+  }
+
   return (
-    <div className="w-full min-h-screen bg-background flex flex-col items-center p-6">
-      <h1 className="text-foreground text-3xl font-bold mt-8">QR File Transfer</h1>
-      <p className="text-foreground/60 mt-2">Peer-to-peer file sharing via WebRTC</p>
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
+      <div className="max-w-2xl mx-auto">
+        <h1 className="text-4xl font-bold mb-2">File Transfer</h1>
+        <p className="text-gray-400 mb-8">Secure peer-to-peer file sharing via QR codes</p>
 
-      {/* Connection Status */}
-      <div className="mt-4 flex items-center gap-2">
-        <div
-          className={`w-3 h-3 rounded-full ${
-            connectionStatus === "connected"
-              ? "bg-green-500"
-              : connectionStatus === "waiting"
-                ? "bg-yellow-500"
-                : "bg-red-500"
-          }`}
-        />
-        <span className="text-foreground/80 text-sm capitalize">{connectionStatus}</span>
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex gap-4 mt-6">
-        <button
-          onClick={createOfferQR}
-          disabled={connectionStatus === "connected"}
-          className="bg-green-600 hover:bg-green-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
-        >
-          Create Offer QR
-        </button>
-
-        <button
-          onClick={() => setCameraMode(true)}
-          disabled={connectionStatus === "connected"}
-          className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
-        >
-          Scan QR
-        </button>
-      </div>
-
-      {/* Camera Scanner */}
-      {cameraMode && (
-        <CameraScanner
-          onScan={(txt) => {
-            handleScan(txt)
-            setCameraMode(false)
-          }}
-          onClose={() => setCameraMode(false)}
-        />
-      )}
-
-      {/* QR Code Display */}
-      {qrImage && (
-        <div className="mt-6">
-          <img src={qrImage || "/placeholder.svg"} alt="QR Code" className="w-72 bg-white p-4 rounded-xl" />
-          <p className="text-foreground/60 text-sm text-center mt-2">
-            {connectionStatus === "waiting" ? "Scan this QR with another device" : "QR Code Ready"}
-          </p>
+        <div className="mb-8 flex gap-4">
+          <button
+            onClick={() => setNetworkMode("local")}
+            className={`flex-1 px-4 py-3 rounded-lg font-medium transition-colors ${
+              networkMode === "local" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            Local Network
+          </button>
+          <button
+            onClick={() => setNetworkMode("internet")}
+            className={`flex-1 px-4 py-3 rounded-lg font-medium transition-colors ${
+              networkMode === "internet" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            Internet
+          </button>
         </div>
-      )}
 
-      {/* File Selection */}
-      {connectionStatus === "connected" && (
-        <div className="mt-8 flex flex-col items-center">
-          <label className="cursor-pointer bg-muted hover:bg-muted/80 px-6 py-3 rounded-xl text-foreground font-medium transition-colors">
-            Select File
-            <input type="file" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} className="hidden" />
-          </label>
+        <div className="mb-8 p-4 bg-gray-800/50 border border-gray-700 rounded-lg">
+          <p className="text-sm text-gray-400">Status</p>
+          <p className="text-lg font-semibold capitalize">{connectionStatus}</p>
+        </div>
 
-          {selectedFile && (
-            <div className="mt-4 text-center">
-              <p className="text-foreground font-medium">{selectedFile.name}</p>
-              <p className="text-foreground/60 text-sm">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+        <div className="flex gap-3 mb-8 flex-wrap">
+          <button
+            onClick={createOfferQR}
+            disabled={connectionStatus === "connected"}
+            className="flex-1 min-w-fit bg-green-600 hover:bg-green-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
+          >
+            Send Files
+          </button>
+          <button
+            onClick={() => setCameraMode(true)}
+            disabled={connectionStatus === "connected"}
+            className="flex-1 min-w-fit bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
+          >
+            Scan QR
+          </button>
+          <button
+            onClick={() => setImageScanMode(true)}
+            disabled={connectionStatus === "connected"}
+            className="flex-1 min-w-fit bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
+          >
+            Scan Image
+          </button>
+          <button
+            onClick={() => setManualMode(!manualMode)}
+            className="flex-1 min-w-fit bg-orange-600 hover:bg-orange-700 px-6 py-3 rounded-lg font-medium transition-colors"
+          >
+            Manual Entry
+          </button>
+        </div>
 
+        {qrImage && (
+          <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <h3 className="text-lg font-semibold mb-4">Share QR Code</h3>
+            <div className="flex flex-col items-center">
+              <img src={qrImage || "/placeholder.svg"} alt="QR Code" className="w-64 bg-white p-4 rounded-lg" />
               <button
-                onClick={() => sendLargeFile(selectedFile)}
-                disabled={sendProgress > 0 && sendProgress < 100}
-                className="mt-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-6 py-3 rounded-xl text-white font-medium transition-colors"
+                onClick={copyToClipboard}
+                className="mt-4 bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg text-sm font-medium transition-colors"
               >
-                Send File
+                Copy as Text
               </button>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Send Progress */}
-      {sendingFile && (
-        <ProgressBar
-          progress={sendProgress}
-          fileName={sendingFile}
-          label={sendProgress >= 100 ? "File sent successfully!" : "Sending..."}
-        />
-      )}
+        {manualMode && (
+          <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <h3 className="text-lg font-semibold mb-3">Manual Entry</h3>
+            <textarea
+              value={manualInput}
+              onChange={(e) => {
+                setManualInput(e.target.value)
+                if (e.target.value.trim()) {
+                  setImageScanError("")
+                }
+              }}
+              placeholder="Paste offer or answer text here (must start with 'o|' or 'a|')..."
+              className="w-full h-32 bg-gray-900 text-white border border-gray-700 rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
+            />
+            {imageScanError && <p className="text-red-400 text-sm mb-3">{imageScanError}</p>}
+            <div className="flex gap-3">
+              <button
+                onClick={handleManualSubmit}
+                className="flex-1 bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg font-medium transition-colors"
+              >
+                Connect
+              </button>
+              <button
+                onClick={() => {
+                  setManualMode(false)
+                  setImageScanError("")
+                }}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
-      {/* Receive Progress */}
-      {receivingFile && (
-        <ProgressBar
-          progress={receiveProgress}
-          fileName={receivingFile}
-          label={receiveProgress >= 100 ? "File received!" : "Receiving..."}
-        />
-      )}
+        {imageScanMode && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+            <div className="bg-slate-900 p-6 rounded-2xl max-w-md w-full mx-4">
+              <h3 className="text-xl font-bold text-white mb-4">Scan QR Code from Image</h3>
+
+              <label className="block bg-gray-900 border-2 border-dashed border-gray-600 rounded-lg p-8 cursor-pointer hover:border-cyan-500 transition-colors mb-4">
+                <div className="flex flex-col items-center gap-2">
+                  <svg className="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                    />
+                  </svg>
+                  <span className="font-medium">Click to select image</span>
+                  <span className="text-sm text-gray-400">PNG, JPG, or GIF</span>
+                </div>
+                <input type="file" accept="image/*" className="hidden" onChange={handleImageScan} />
+              </label>
+
+              {imageScanStatus && <p className="text-cyan-400 text-center mb-4">{imageScanStatus}</p>}
+
+              {imageScanError && <p className="text-red-400 text-center mb-4">{imageScanError}</p>}
+
+              <button
+                onClick={() => {
+                  setImageScanMode(false)
+                  setImageScanError("")
+                  setImageScanStatus("")
+                }}
+                className="w-full bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-white font-medium"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
+        {connectionStatus === "connected" && mode === "sender" && (
+          <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <h3 className="text-lg font-semibold mb-4">Select Files to Send</h3>
+            <label className="block bg-gray-900 border-2 border-dashed border-gray-600 rounded-lg p-8 cursor-pointer hover:border-blue-500 transition-colors">
+              <div className="flex flex-col items-center gap-2">
+                <svg className="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span className="font-medium">Click or drag files here</span>
+                <span className="text-sm text-gray-400">Up to 5GB per file</span>
+              </div>
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  setSelectedFiles(Array.from(e.target.files || []))
+                }}
+              />
+            </label>
+
+            {selectedFiles.length > 0 && (
+              <div className="mt-4">
+                <h4 className="font-medium mb-3">Selected Files ({selectedFiles.length})</h4>
+                <div className="space-y-2 mb-4 max-h-48 overflow-y-auto">
+                  {selectedFiles.map((file, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-gray-900 p-3 rounded">
+                      <div>
+                        <p className="font-medium text-sm">{file.name}</p>
+                        <p className="text-xs text-gray-400">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                      </div>
+                      <button
+                        onClick={() => setSelectedFiles(selectedFiles.filter((_, i) => i !== idx))}
+                        className="text-red-500 hover:text-red-400"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={sendFiles}
+                  className="w-full bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-medium transition-colors"
+                >
+                  Send {selectedFiles.length} File{selectedFiles.length !== 1 ? "s" : ""}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {Object.keys(sendingFiles).length > 0 && (
+          <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <h3 className="text-lg font-semibold mb-4">Sending Files</h3>
+            {Object.keys(sendingFiles).map((fileName) => (
+              <ProgressBar
+                key={fileName}
+                progress={sendProgress[fileName] || 0}
+                fileName={fileName}
+                label={sendProgress[fileName] >= 100 ? "Complete" : "Sending..."}
+              />
+            ))}
+          </div>
+        )}
+
+        {Object.keys(receivingFiles).length > 0 && (
+          <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <h3 className="text-lg font-semibold mb-4">Receiving Files</h3>
+            {Object.keys(receivingFiles).map((fileName) => (
+              <ProgressBar
+                key={fileName}
+                progress={receiveProgress[fileName] || 0}
+                fileName={fileName}
+                label={receiveProgress[fileName] >= 100 ? "Complete - Downloading..." : "Receiving..."}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {cameraMode && <CameraScanner onScan={handleScan} onClose={() => setCameraMode(false)} />}
     </div>
   )
 }
