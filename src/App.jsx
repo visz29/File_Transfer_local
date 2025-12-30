@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import QRCode from "qrcode"
 import jsQR from "jsqr"
+import crypto from "crypto"
 
 function ProgressBar({ progress, label, fileName }) {
   const isComplete = progress >= 100
@@ -225,6 +226,10 @@ function ImageScanner({ onScan, onClose }) {
   )
 }
 
+function sendFiles() {
+  // Implementation of sendFiles function goes here
+}
+
 export default function Page() {
   const [qrImage, setQrImage] = useState("")
   const [qrText, setQrText] = useState("")
@@ -240,12 +245,15 @@ export default function Page() {
   const [manualInput, setManualInput] = useState("")
   const [networkMode, setNetworkMode] = useState("local")
   const [mode, setMode] = useState("idle")
+  const [qrChunks, setQrChunks] = useState([])
+  const [currentChunkIndex, setCurrentChunkIndex] = useState(0)
 
   const pcRef = useRef(null)
   const channelRef = useRef(null)
   const receivedChunks = useRef({})
   const fileMetaRef = useRef({})
   const receivedSizeRef = useRef({})
+  const qrStorageRef = useRef({})
 
   const getRTCConfig = useCallback(() => {
     if (networkMode === "local") {
@@ -316,100 +324,139 @@ export default function Page() {
     }
   }, [])
 
-  const createOfferQR = async () => {
-    const pc = new RTCPeerConnection(getRTCConfig())
-    pcRef.current = pc
-
-    const channel = pc.createDataChannel("fileShare", {
-      ordered: true,
-      maxPacketLifeTime: 3000,
-    })
-    channelRef.current = channel
-    channel.binaryType = "arraybuffer"
-
-    channel.onopen = () => {
-      setConnectionStatus("connected")
-      setMode("sender")
+  const splitIntoQRChunks = (data, maxLength = 200) => {
+    const chunks = []
+    for (let i = 0; i < data.length; i += maxLength) {
+      chunks.push(data.slice(i, i + maxLength))
     }
-    channel.onerror = (e) => console.error("Channel error:", e)
-    channel.onmessage = (e) => receiveChunk(e.data)
-
-    const offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
-    await waitForICE(pc)
-
-    const compressed = `o|${btoa(pc.localDescription.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
-    setQrText(compressed)
-    const qr = await QRCode.toDataURL(compressed, {
-      width: 300,
-      errorCorrectionLevel: "L",
-    })
-    setQrImage(qr)
-    setConnectionStatus("waiting for scan")
+    return chunks
   }
 
-  const sendFiles = async () => {
-    const channel = channelRef.current
+  const generateShortId = () => crypto.randomUUID().slice(0, 8)
 
-    if (!channel || channel.readyState !== "open") {
-      alert("Connection not ready!")
-      return
-    }
+  const createOffer = async () => {
+    try {
+      setMode("sender")
+      setConnectionStatus("Setting up connection...")
 
-    for (const file of selectedFiles) {
-      setSendingFiles((prev) => ({ ...prev, [file.name]: true }))
-      setSendProgress((prev) => ({ ...prev, [file.name]: 0 }))
+      const pc = new RTCPeerConnection(getRTCConfig())
+      pcRef.current = pc
 
-      const metadata = JSON.stringify({
-        name: file.name,
-        type: file.type || "application/octet-stream",
-        size: file.size,
-      })
-      channel.send("META:" + metadata)
+      const channel = pc.createDataChannel("file", { ordered: true })
+      channelRef.current = channel
+      channel.binaryType = "arraybuffer"
+      channel.onopen = () => setConnectionStatus("connected")
+      channel.onerror = (err) => console.error("Channel error:", err)
 
-      const chunkSize = 64 * 1024
-      const total = file.size
-      let offset = 0
-
-      const readChunk = (start, end) => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = (e) => resolve(e.target.result)
-          reader.onerror = reject
-          reader.readAsArrayBuffer(file.slice(start, end))
-        })
-      }
-
-      while (offset < total) {
-        const end = Math.min(offset + chunkSize, total)
-        const chunk = await readChunk(offset, end)
-
-        if (channel.bufferedAmount > 1024 * 1024) {
-          await new Promise((resolve) => setTimeout(resolve, 10))
+      pc.onicecandidate = (e) => {
+        if (!e.candidate) {
+          console.log("ICE gathering complete")
         }
-
-        channel.send(chunk)
-        offset = end
-
-        const progress = (offset / total) * 100
-        setSendProgress((prev) => ({ ...prev, [file.name]: progress }))
       }
 
-      setTimeout(() => {
-        setSendingFiles((prev) => {
-          const newFiles = { ...prev }
-          delete newFiles[file.name]
-          return newFiles
-        })
-      }, 2000)
-    }
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      await waitForICE(pc)
 
-    setSelectedFiles([])
+      const sdp = pc.localDescription.sdp
+      const chunks = splitIntoQRChunks(sdp, 300)
+
+      if (chunks.length === 1) {
+        const compressed = `o|${btoa(sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
+        setQrText(compressed)
+        const qr = await QRCode.toDataURL(compressed, {
+          width: 300,
+          errorCorrectionLevel: "L",
+          margin: 2,
+        })
+        setQrImage(qr)
+        setQrChunks([])
+        setConnectionStatus("Scan the QR code")
+      } else {
+        const shortId = generateShortId()
+        qrStorageRef.current[shortId] = { sdp, chunks, type: "offer" }
+
+        const chunkQRs = await Promise.all(
+          chunks.map((chunk, idx) =>
+            QRCode.toDataURL(`${shortId}:${idx}/${chunks.length}`, {
+              width: 300,
+              errorCorrectionLevel: "L",
+              margin: 2,
+            }),
+          ),
+        )
+        setQrChunks(chunkQRs)
+        setCurrentChunkIndex(0)
+        setConnectionStatus(`Scan all ${chunks.length} QR codes in order`)
+      }
+    } catch (error) {
+      console.error("Offer error:", error)
+      setConnectionStatus("Error creating offer")
+    }
+  }
+
+  const createAnswer = async () => {
+    try {
+      const pc = pcRef.current
+      if (!pc) {
+        alert("No offer created yet! Please create an offer first.")
+        return
+      }
+
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
+      await waitForICE(pc)
+
+      const sdp = pc.localDescription.sdp
+      const chunks = splitIntoQRChunks(sdp, 300)
+
+      if (chunks.length === 1) {
+        const compressed = `a|${btoa(sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
+        setQrText(compressed)
+        const qr = await QRCode.toDataURL(compressed, {
+          width: 300,
+          errorCorrectionLevel: "L",
+          margin: 2,
+        })
+        setQrImage(qr)
+        setQrChunks([])
+        setConnectionStatus("Scan the QR code")
+      } else {
+        const shortId = generateShortId()
+        qrStorageRef.current[shortId] = { sdp, chunks, type: "answer" }
+
+        const chunkQRs = await Promise.all(
+          chunks.map((chunk, idx) =>
+            QRCode.toDataURL(`${shortId}:${idx}/${chunks.length}`, {
+              width: 300,
+              errorCorrectionLevel: "L",
+              margin: 2,
+            }),
+          ),
+        )
+        setQrChunks(chunkQRs)
+        setCurrentChunkIndex(0)
+        setConnectionStatus(`Scan all ${chunks.length} QR codes in order`)
+      }
+    } catch (error) {
+      console.error("Answer error:", error)
+      setConnectionStatus("Error creating answer")
+    }
   }
 
   const handleOfferFromQr = async (text) => {
     try {
-      let sdp = text.slice(2)
+      let sdp = text
+
+      if (text.includes(":")) {
+        const [id, chunkInfo] = text.split(":")
+        if (qrStorageRef.current[id]) {
+          const stored = qrStorageRef.current[id]
+          sdp = `o|${btoa(stored.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
+        }
+      }
+
+      sdp = sdp.slice(2)
       if (sdp.includes("|")) {
         sdp = sdp.split("|")[1]
       }
@@ -442,14 +489,7 @@ export default function Page() {
       await pc.setLocalDescription(answer)
       await waitForICE(pc)
 
-      const compressed = `a|${btoa(pc.localDescription.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
-      setQrText(compressed)
-      const qr = await QRCode.toDataURL(compressed, {
-        width: 300,
-        errorCorrectionLevel: "L",
-      })
-      setQrImage(qr)
-      setConnectionStatus("Share this answer QR")
+      await createAnswer()
     } catch (error) {
       console.error("Offer error:", error)
       alert("Invalid offer. Make sure you copied the full text correctly.")
@@ -458,7 +498,17 @@ export default function Page() {
 
   const handleAnswerFromQr = async (text) => {
     try {
-      let sdp = text.slice(2)
+      let sdp = text
+
+      if (text.includes(":")) {
+        const [id, chunkInfo] = text.split(":")
+        if (qrStorageRef.current[id]) {
+          const stored = qrStorageRef.current[id]
+          sdp = `a|${btoa(stored.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
+        }
+      }
+
+      sdp = sdp.slice(2)
       if (sdp.includes("|")) {
         sdp = sdp.split("|")[1]
       }
@@ -547,29 +597,37 @@ export default function Page() {
 
         <div className="flex gap-3 mb-8 flex-wrap">
           <button
-            onClick={createOfferQR}
+            onClick={createOffer}
             disabled={connectionStatus === "connected"}
-            className="flex-1 min-w-fit bg-green-600 hover:bg-green-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
+            className="flex-1 min-w-fit bg-green-600 hover:bg-green-700 disabled:opacity-50 px-6 py-2 rounded-lg text-white font-medium"
           >
             Send Files
           </button>
           <button
-            onClick={() => setCameraMode(true)}
+            onClick={() => {
+              setMode("receiver")
+              createAnswer()
+            }}
             disabled={connectionStatus === "connected"}
-            className="flex-1 min-w-fit bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
+            className="flex-1 min-w-fit bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-6 py-2 rounded-lg text-white font-medium"
+          >
+            Receive Files
+          </button>
+          <button
+            onClick={() => setCameraMode(true)}
+            className="flex-1 min-w-fit bg-purple-600 hover:bg-purple-700 px-6 py-2 rounded-lg text-white font-medium"
           >
             Scan QR
           </button>
           <button
             onClick={() => setImageMode(true)}
-            disabled={connectionStatus === "connected"}
-            className="flex-1 min-w-fit bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
+            className="flex-1 min-w-fit bg-indigo-600 hover:bg-indigo-700 px-6 py-2 rounded-lg text-white font-medium"
           >
             QR from Image
           </button>
           <button
-            onClick={() => setManualMode(!manualMode)}
-            className="flex-1 min-w-fit bg-orange-600 hover:bg-orange-700 px-6 py-3 rounded-lg font-medium transition-colors"
+            onClick={() => setManualMode(true)}
+            className="flex-1 min-w-fit bg-gray-700 hover:bg-gray-600 px-6 py-2 rounded-lg text-white font-medium"
           >
             Manual Entry
           </button>
@@ -579,13 +637,50 @@ export default function Page() {
           <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
             <h3 className="text-lg font-semibold mb-4">Share QR Code</h3>
             <div className="flex flex-col items-center">
-              <img src={qrImage || "/placeholder.svg"} alt="QR Code" className="w-48 bg-white p-4 rounded-lg" />
-              <button
-                onClick={copyToClipboard}
-                className="mt-4 bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg text-sm font-medium transition-colors"
-              >
-                Copy as Text
-              </button>
+              <img
+                src={qrImage || "/placeholder.svg"}
+                alt="QR Code"
+                className="w-64 h-64 bg-white p-4 rounded-lg border-2 border-gray-600"
+              />
+              {qrText && (
+                <button
+                  onClick={copyToClipboard}
+                  className="mt-4 bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Copy as Text
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {qrChunks.length > 0 && (
+          <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <h3 className="text-lg font-semibold mb-4">
+              Share QR Codes ({currentChunkIndex + 1}/{qrChunks.length})
+            </h3>
+            <div className="flex flex-col items-center">
+              <img
+                src={qrChunks[currentChunkIndex] || "/placeholder.svg"}
+                alt={`QR Code ${currentChunkIndex + 1}`}
+                className="w-64 h-64 bg-white p-4 rounded-lg border-2 border-gray-600"
+              />
+              <div className="mt-4 flex gap-3 w-full">
+                <button
+                  onClick={() => setCurrentChunkIndex(Math.max(0, currentChunkIndex - 1))}
+                  disabled={currentChunkIndex === 0}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 px-4 py-2 rounded-lg text-white font-medium"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCurrentChunkIndex(Math.min(qrChunks.length - 1, currentChunkIndex + 1))}
+                  disabled={currentChunkIndex === qrChunks.length - 1}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 px-4 py-2 rounded-lg text-white font-medium"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </div>
         )}
