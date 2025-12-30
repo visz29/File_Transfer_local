@@ -150,11 +150,86 @@ function CameraScanner({ onScan, onClose }) {
   )
 }
 
-// All type annotations removed
+function ImageScanner({ onScan, onClose }) {
+  const fileInputRef = useRef(null)
+  const canvasRef = useRef(null)
+  const [scanError, setScanError] = useState("")
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = async (event) => {
+      try {
+        const img = new Image()
+        img.onload = () => {
+          const canvas = canvasRef.current
+          if (!canvas) return
+
+          canvas.width = img.width
+          canvas.height = img.height
+          const ctx = canvas.getContext("2d")
+          if (!ctx) return
+
+          ctx.drawImage(img, 0, 0)
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const code = jsQR(imageData.data, imageData.width, imageData.height)
+
+          if (code) {
+            setScanError("")
+            onScan(code.data)
+          } else {
+            setScanError("No QR code found in image")
+          }
+        }
+        img.src = event.target?.result
+      } catch (error) {
+        setScanError("Error processing image")
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+      <div className="bg-slate-900 p-6 rounded-2xl max-w-md w-full mx-4">
+        <h3 className="text-xl font-bold text-white mb-4">Scan QR from Image</h3>
+        <canvas ref={canvasRef} className="hidden" />
+
+        <label className="block bg-gray-900 border-2 border-dashed border-gray-600 rounded-lg p-8 cursor-pointer hover:border-blue-500 transition-colors mb-4">
+          <div className="flex flex-col items-center gap-2">
+            <svg className="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+              />
+            </svg>
+            <span className="font-medium">Click to upload QR image</span>
+          </div>
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+        </label>
+
+        {scanError && <p className="text-red-400 text-center mb-4">{scanError}</p>}
+
+        <button
+          onClick={onClose}
+          className="w-full bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-white font-medium"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Page() {
   const [qrImage, setQrImage] = useState("")
   const [qrText, setQrText] = useState("")
   const [cameraMode, setCameraMode] = useState(false)
+  const [imageMode, setImageMode] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState([])
   const [sendProgress, setSendProgress] = useState({})
   const [receiveProgress, setReceiveProgress] = useState({})
@@ -165,9 +240,6 @@ export default function Page() {
   const [manualInput, setManualInput] = useState("")
   const [networkMode, setNetworkMode] = useState("local")
   const [mode, setMode] = useState("idle")
-  const [imageScanMode, setImageScanMode] = useState(false)
-  const [imageScanStatus, setImageScanStatus] = useState("")
-  const [imageScanError, setImageScanError] = useState("")
 
   const pcRef = useRef(null)
   const channelRef = useRef(null)
@@ -266,10 +338,10 @@ export default function Page() {
     await pc.setLocalDescription(offer)
     await waitForICE(pc)
 
-    const compressed = `o|${pc.localDescription.sdp}`
+    const compressed = `o|${btoa(pc.localDescription.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
     setQrText(compressed)
     const qr = await QRCode.toDataURL(compressed, {
-      width: 400,
+      width: 300,
       errorCorrectionLevel: "L",
     })
     setQrImage(qr)
@@ -337,7 +409,17 @@ export default function Page() {
 
   const handleOfferFromQr = async (text) => {
     try {
-      const sdp = text.slice(2)
+      let sdp = text.slice(2)
+      if (sdp.includes("|")) {
+        sdp = sdp.split("|")[1]
+      }
+      sdp = atob(
+        sdp
+          .replace(/-/g, "+")
+          .replace(/_/g, "/")
+          .padEnd(sdp.length + ((4 - (sdp.length % 4)) % 4), "="),
+      )
+
       const pc = new RTCPeerConnection(getRTCConfig())
       pcRef.current = pc
 
@@ -360,27 +442,37 @@ export default function Page() {
       await pc.setLocalDescription(answer)
       await waitForICE(pc)
 
-      const compressed = `a|${pc.localDescription.sdp}`
+      const compressed = `a|${btoa(pc.localDescription.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
       setQrText(compressed)
       const qr = await QRCode.toDataURL(compressed, {
-        width: 400,
+        width: 300,
         errorCorrectionLevel: "L",
       })
       setQrImage(qr)
       setConnectionStatus("Share this answer QR")
     } catch (error) {
       console.error("Offer error:", error)
-      alert("Invalid offer: " + error.message)
+      alert("Invalid offer. Make sure you copied the full text correctly.")
     }
   }
 
   const handleAnswerFromQr = async (text) => {
     try {
-      const sdp = text.slice(2)
+      let sdp = text.slice(2)
+      if (sdp.includes("|")) {
+        sdp = sdp.split("|")[1]
+      }
+      sdp = atob(
+        sdp
+          .replace(/-/g, "+")
+          .replace(/_/g, "/")
+          .padEnd(sdp.length + ((4 - (sdp.length % 4)) % 4), "="),
+      )
+
       const pc = pcRef.current
 
       if (!pc) {
-        alert("No offer created yet!")
+        alert("No offer created yet! Please create an offer first.")
         return
       }
 
@@ -389,7 +481,7 @@ export default function Page() {
       setConnectionStatus("connected")
     } catch (error) {
       console.error("Answer error:", error)
-      alert("Invalid answer: " + error.message)
+      alert("Invalid answer. Make sure you copied the full text correctly.")
     }
   }
 
@@ -399,81 +491,23 @@ export default function Page() {
     } else if (text.startsWith("a|")) {
       handleAnswerFromQr(text)
     } else {
-      alert("Invalid QR code format")
+      alert("Invalid QR code format. Make sure it's a valid file transfer QR code.")
     }
   }
 
   const handleManualSubmit = () => {
-    const trimmedInput = manualInput.trim()
-    if (!trimmedInput) {
-      setImageScanError("Please enter a valid QR code")
+    if (!manualInput.trim()) {
+      alert("Please enter offer or answer text")
       return
     }
-
-    if (!trimmedInput.startsWith("o|") && !trimmedInput.startsWith("a|")) {
-      setImageScanError("Invalid format. Must start with 'o|' or 'a|'")
+    const text = manualInput.trim()
+    if (!text.startsWith("o|") && !text.startsWith("a|")) {
+      alert("Text must start with 'o|' for offer or 'a|' for answer")
       return
     }
-
-    setImageScanError("")
-    handleScan(trimmedInput)
+    handleScan(text)
     setManualInput("")
     setManualMode(false)
-  }
-
-  const handleImageScan = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    setImageScanStatus("Processing image...")
-    setImageScanError("")
-
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      try {
-        const img = new Image()
-        img.crossOrigin = "anonymous"
-        img.onload = () => {
-          const canvas = document.createElement("canvas")
-          canvas.width = img.width
-          canvas.height = img.height
-          const ctx = canvas.getContext("2d")
-
-          if (!ctx) {
-            setImageScanError("Failed to process image")
-            setImageScanStatus("")
-            return
-          }
-
-          ctx.drawImage(img, 0, 0)
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-          const code = jsQR(imageData.data, imageData.width, imageData.height)
-
-          if (code) {
-            setImageScanStatus("")
-            setImageScanError("")
-            handleScan(code.data)
-            setImageScanMode(false)
-          } else {
-            setImageScanError("No QR code found in image")
-            setImageScanStatus("")
-          }
-        }
-        img.onerror = () => {
-          setImageScanError("Failed to load image")
-          setImageScanStatus("")
-        }
-        img.src = event.target.result
-      } catch (error) {
-        setImageScanError("Error processing image: " + error.message)
-        setImageScanStatus("")
-      }
-    }
-    reader.onerror = () => {
-      setImageScanError("Failed to read file")
-      setImageScanStatus("")
-    }
-    reader.readAsDataURL(file)
   }
 
   const copyToClipboard = () => {
@@ -482,7 +516,7 @@ export default function Page() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-950 to-slate-950 text-white p-6">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-4xl font-bold mb-2">File Transfer</h1>
         <p className="text-gray-400 mb-8">Secure peer-to-peer file sharing via QR codes</p>
@@ -527,11 +561,11 @@ export default function Page() {
             Scan QR
           </button>
           <button
-            onClick={() => setImageScanMode(true)}
+            onClick={() => setImageMode(true)}
             disabled={connectionStatus === "connected"}
-            className="flex-1 min-w-fit bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
+            className="flex-1 min-w-fit bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-6 py-3 rounded-lg font-medium transition-colors"
           >
-            Scan Image
+            QR from Image
           </button>
           <button
             onClick={() => setManualMode(!manualMode)}
@@ -545,7 +579,7 @@ export default function Page() {
           <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
             <h3 className="text-lg font-semibold mb-4">Share QR Code</h3>
             <div className="flex flex-col items-center">
-              <img src={qrImage || "/placeholder.svg"} alt="QR Code" className="w-64 bg-white p-4 rounded-lg" />
+              <img src={qrImage || "/placeholder.svg"} alt="QR Code" className="w-48 bg-white p-4 rounded-lg" />
               <button
                 onClick={copyToClipboard}
                 className="mt-4 bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -561,16 +595,10 @@ export default function Page() {
             <h3 className="text-lg font-semibold mb-3">Manual Entry</h3>
             <textarea
               value={manualInput}
-              onChange={(e) => {
-                setManualInput(e.target.value)
-                if (e.target.value.trim()) {
-                  setImageScanError("")
-                }
-              }}
-              placeholder="Paste offer or answer text here (must start with 'o|' or 'a|')..."
+              onChange={(e) => setManualInput(e.target.value)}
+              placeholder="Paste offer (o|...) or answer (a|...) text here..."
               className="w-full h-32 bg-gray-900 text-white border border-gray-700 rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
             />
-            {imageScanError && <p className="text-red-400 text-sm mb-3">{imageScanError}</p>}
             <div className="flex gap-3">
               <button
                 onClick={handleManualSubmit}
@@ -581,50 +609,11 @@ export default function Page() {
               <button
                 onClick={() => {
                   setManualMode(false)
-                  setImageScanError("")
+                  setManualInput("")
                 }}
                 className="flex-1 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg font-medium transition-colors"
               >
                 Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {imageScanMode && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-            <div className="bg-slate-900 p-6 rounded-2xl max-w-md w-full mx-4">
-              <h3 className="text-xl font-bold text-white mb-4">Scan QR Code from Image</h3>
-
-              <label className="block bg-gray-900 border-2 border-dashed border-gray-600 rounded-lg p-8 cursor-pointer hover:border-cyan-500 transition-colors mb-4">
-                <div className="flex flex-col items-center gap-2">
-                  <svg className="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                    />
-                  </svg>
-                  <span className="font-medium">Click to select image</span>
-                  <span className="text-sm text-gray-400">PNG, JPG, or GIF</span>
-                </div>
-                <input type="file" accept="image/*" className="hidden" onChange={handleImageScan} />
-              </label>
-
-              {imageScanStatus && <p className="text-cyan-400 text-center mb-4">{imageScanStatus}</p>}
-
-              {imageScanError && <p className="text-red-400 text-center mb-4">{imageScanError}</p>}
-
-              <button
-                onClick={() => {
-                  setImageScanMode(false)
-                  setImageScanError("")
-                  setImageScanStatus("")
-                }}
-                className="w-full bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-white font-medium"
-              >
-                Close
               </button>
             </div>
           </div>
@@ -684,12 +673,12 @@ export default function Page() {
         {Object.keys(sendingFiles).length > 0 && (
           <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
             <h3 className="text-lg font-semibold mb-4">Sending Files</h3>
-            {Object.keys(sendingFiles).map((fileName) => (
+            {selectedFiles.map((file) => (
               <ProgressBar
-                key={fileName}
-                progress={sendProgress[fileName] || 0}
-                fileName={fileName}
-                label={sendProgress[fileName] >= 100 ? "Complete" : "Sending..."}
+                key={file.name}
+                progress={sendProgress[file.name] || 0}
+                fileName={file.name}
+                label={`${(sendProgress[file.name] || 0).toFixed(1)}%`}
               />
             ))}
           </div>
@@ -698,12 +687,12 @@ export default function Page() {
         {Object.keys(receivingFiles).length > 0 && (
           <div className="mb-8 p-6 bg-gray-800/50 border border-gray-700 rounded-lg">
             <h3 className="text-lg font-semibold mb-4">Receiving Files</h3>
-            {Object.keys(receivingFiles).map((fileName) => (
+            {Object.entries(receivingFiles).map(([name, meta]) => (
               <ProgressBar
-                key={fileName}
-                progress={receiveProgress[fileName] || 0}
-                fileName={fileName}
-                label={receiveProgress[fileName] >= 100 ? "Complete - Downloading..." : "Receiving..."}
+                key={name}
+                progress={receiveProgress[name] || 0}
+                fileName={name}
+                label={`${((((receiveProgress[name] || 0) / 100) * meta.size) / 1024 / 1024).toFixed(1)} MB / ${(meta.size / 1024 / 1024).toFixed(1)} MB`}
               />
             ))}
           </div>
@@ -711,6 +700,7 @@ export default function Page() {
       </div>
 
       {cameraMode && <CameraScanner onScan={handleScan} onClose={() => setCameraMode(false)} />}
+      {imageMode && <ImageScanner onScan={handleScan} onClose={() => setImageMode(false)} />}
     </div>
   )
 }
