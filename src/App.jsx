@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import QRCode from "qrcode"
 import jsQR from "jsqr"
-import crypto from "crypto"
 
 function ProgressBar({ progress, label, fileName }) {
   const isComplete = progress >= 100
@@ -266,7 +265,9 @@ export default function Page() {
 
   const waitForICE = useCallback((pc) => {
     return new Promise((resolve) => {
-      if (pc.iceGatheringState === "complete") return resolve()
+      if (pc.iceGatheringState === "complete") {
+        return resolve()
+      }
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === "complete") resolve()
       }
@@ -332,7 +333,7 @@ export default function Page() {
     return chunks
   }
 
-  const generateShortId = () => crypto.randomUUID().slice(0, 8)
+  const generateShortId = () => Math.random().toString(36).substring(2, 10)
 
   const createOffer = async () => {
     try {
