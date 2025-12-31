@@ -50,6 +50,7 @@ function rebuildSDP(min) {
 
 function Share() {
   let [offer, setOffer] = useState("")
+  let [offer2, setOffer2] = useState("")
   let pcRef = useRef('')
   let channelRef = useRef('')
   let [img, setImg] = useState('')
@@ -138,7 +139,7 @@ function Share() {
         requestAnimationFrame(scanFrame);
       }
       console.log(code.data);
-      
+      setOffer2(code.data)
     };
   
 
@@ -161,7 +162,7 @@ function Share() {
       <div className='w-full bg-green-200'>
         <h3>Device B</h3>
         <button className='bg-cyan-300' onClick={createOffer}>Create Offer</button>
-        <textarea className='w-full' value={''} readOnly name="" id=""></textarea>
+        <textarea className='w-full' value={offer2} readOnly name="" id=""></textarea>
         <button onClick={scanQr}>SCAn QR</button>
         <video ref={videoRef} className="w-full max-w-md rounded-xl" />
       </div>
