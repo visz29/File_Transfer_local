@@ -449,24 +449,30 @@ export default function Page() {
     try {
       let sdp = text
 
+      // Check if this is a chunk reference (id:chunkIndex/totalChunks format)
       if (text.includes(":")) {
-        const [id, chunkInfo] = text.split(":")
+        const [id, chunkPart] = text.split(":")
         if (qrStorageRef.current[id]) {
           const stored = qrStorageRef.current[id]
-          sdp = `o|${btoa(stored.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
+          sdp = stored.sdp // Use the stored SDP directly
+        } else {
+          alert("QR chunk not found. Please scan all chunks or restart.")
+          return
         }
+      } else {
+        // Single QR code - decode the base64url encoded data
+        if (!text.startsWith("o|")) {
+          alert("Invalid offer format. Must start with 'o|'")
+          return
+        }
+        sdp = text.slice(2) // Remove 'o|' prefix
+        sdp = atob(
+          sdp
+            .replace(/-/g, "+")
+            .replace(/_/g, "/")
+            .padEnd(sdp.length + ((4 - (sdp.length % 4)) % 4), "="),
+        )
       }
-
-      sdp = sdp.slice(2)
-      if (sdp.includes("|")) {
-        sdp = sdp.split("|")[1]
-      }
-      sdp = atob(
-        sdp
-          .replace(/-/g, "+")
-          .replace(/_/g, "/")
-          .padEnd(sdp.length + ((4 - (sdp.length % 4)) % 4), "="),
-      )
 
       const pc = new RTCPeerConnection(getRTCConfig())
       pcRef.current = pc
@@ -501,24 +507,30 @@ export default function Page() {
     try {
       let sdp = text
 
+      // Check if this is a chunk reference (id:chunkIndex/totalChunks format)
       if (text.includes(":")) {
-        const [id, chunkInfo] = text.split(":")
+        const [id, chunkPart] = text.split(":")
         if (qrStorageRef.current[id]) {
           const stored = qrStorageRef.current[id]
-          sdp = `a|${btoa(stored.sdp).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}`
+          sdp = stored.sdp // Use the stored SDP directly
+        } else {
+          alert("QR chunk not found. Please scan all chunks or restart.")
+          return
         }
+      } else {
+        // Single QR code - decode the base64url encoded data
+        if (!text.startsWith("a|")) {
+          alert("Invalid answer format. Must start with 'a|'")
+          return
+        }
+        sdp = text.slice(2) // Remove 'a|' prefix
+        sdp = atob(
+          sdp
+            .replace(/-/g, "+")
+            .replace(/_/g, "/")
+            .padEnd(sdp.length + ((4 - (sdp.length % 4)) % 4), "="),
+        )
       }
-
-      sdp = sdp.slice(2)
-      if (sdp.includes("|")) {
-        sdp = sdp.split("|")[1]
-      }
-      sdp = atob(
-        sdp
-          .replace(/-/g, "+")
-          .replace(/_/g, "/")
-          .padEnd(sdp.length + ((4 - (sdp.length % 4)) % 4), "="),
-      )
 
       const pc = pcRef.current
 
@@ -541,6 +553,8 @@ export default function Page() {
       handleOfferFromQr(text)
     } else if (text.startsWith("a|")) {
       handleAnswerFromQr(text)
+    } else if (text.includes(":")) {
+      handleOfferFromQr(text)
     } else {
       alert("Invalid QR code format. Make sure it's a valid file transfer QR code.")
     }

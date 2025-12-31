@@ -10,14 +10,21 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@babel/runtime": "^7.28.4",
+    "@babel/runtime-corejs3": "^7.28.4",
     "@tailwindcss/vite": "^4.1.17",
+    "buffer": "^6.0.3",
     "html5-qrcode": "^2.3.8",
     "jsqr": "^1.4.0",
+    "lucide-react": "^0.562.0",
     "lz-string": "^1.5.0",
     "pako": "^2.1.0",
     "qrcode": "^1.5.4",
+    "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-qr-code": "^2.0.18",
+    "react-qr-scanner": "^1.0.0-alpha.11",
     "tailwindcss": "^4.1.17"
   },
   "devDependencies": {
@@ -28,6 +35,6 @@
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
-    "vite": "^5.1.4"
+    "vite": "^7.3.0"
   }
 }

@@ -4,11 +4,13 @@ import App from './App.jsx'
 import './index.css'
 import Share from './Share.jsx'
 import V0 from './V0.jsx'
+import Gemini from './Gemini.jsx'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
-    {/* <Share /> */}
-    {/* <V0 /> */}
+    {/* <App /> */}
+    <Share />
+    <V0 />
+    {/* <Gemini /> */}
   </React.StrictMode>,
 )
